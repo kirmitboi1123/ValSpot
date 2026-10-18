@@ -497,11 +497,14 @@ class _Prepared:
         self.img = img
         self.fshape = fshape
         self.F = np.fft.rfft2(img, fshape)
-        self.ii = np.pad(img, ((1, 0), (1, 0))).cumsum(0).cumsum(1)
-        self.i2 = np.pad(img * img, ((1, 0), (1, 0))).cumsum(0).cumsum(1)
+        self.ii = np.pad(img.astype(np.float64), ((1, 0), (1, 0))).cumsum(0).cumsum(1)
+        self.i2 = np.pad(img.astype(np.float64) ** 2, ((1, 0), (1, 0))).cumsum(0).cumsum(1)
 
 
 _TPL_FFT: dict = {}
+
+
+MIN_WINDOW_VAR = 1e-2   # sum of squared deviations; any real text window is far above this
 
 
 def ncc_map(img, tpl, prep: "_Prepared | None" = None):
@@ -528,13 +531,15 @@ def ncc_map(img, tpl, prep: "_Prepared | None" = None):
     if prep is not None:
         ii, i2 = prep.ii, prep.i2
     else:
-        ii = np.pad(img, ((1, 0), (1, 0))).cumsum(0).cumsum(1)
-        i2 = np.pad(img * img, ((1, 0), (1, 0))).cumsum(0).cumsum(1)
+        ii = np.pad(img.astype(np.float64), ((1, 0), (1, 0))).cumsum(0).cumsum(1)
+        i2 = np.pad(img.astype(np.float64) ** 2, ((1, 0), (1, 0))).cumsum(0).cumsum(1)
     s = ii[h:, w:] - ii[:-h, w:] - ii[h:, :-w] + ii[:-h, :-w]
     s2 = i2[h:, w:] - i2[:-h, w:] - i2[h:, :-w] + i2[:-h, :-w]
     var = np.maximum(s2 - s * s / (h * w), 0.0)
     den = np.sqrt(var) * tn
-    out = np.where(den > 1e-6, num / np.maximum(den, 1e-6), 0.0)
+    # a flat window (solid wall, sky, black bar) has ~zero spread; rounding error there
+    # used to blow the score up past 1.0 (seen up to 12.8), so treat it as "no match"
+    out = np.where(var > MIN_WINDOW_VAR, num / np.maximum(den, 1e-6), 0.0)
     return out.astype(np.float32)
 
 
