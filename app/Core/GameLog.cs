@@ -9,9 +9,10 @@ using System.Threading;
 
 namespace ValSpot.Core;
 
-public enum GameEventKind { Mode, MatchStart, Pregame, Buy, Combat, RoundEnd, MatchEnd }
+public enum GameEventKind { Mode, MatchStart, Pregame, Buy, Combat, RoundEnd, MatchEnd, CaughtUp }
 
-public readonly record struct GameEvent(GameEventKind Kind, string Value, double Number, DateTime Stamp);
+/// <summary>Stamp is the log's own clock, which is UTC. History = read from before ValSpot started.</summary>
+public readonly record struct GameEvent(GameEventKind Kind, string Value, double Number, DateTime Stamp, bool History = false);
 
 /// <summary>Turns ShooterGame.log lines into round events. Same lines as the Python version:
 /// "Gameplay started at local time 0.x" = buy start, "30.x"/"45.x" = barriers drop,
@@ -22,7 +23,7 @@ public static class GameLogParser
     private static readonly Regex Gameplay = new(@"Gameplay started at local time ([\d.]+)", RegexOptions.Compiled);
     private static readonly Regex RoundEnd = new(@"OnRoundEnded for round '(\d+)'", RegexOptions.Compiled);
     private static readonly Regex Flow = new(@"LogGameFlowStateManager: .*Transitioning from (\w+) to (\w+)", RegexOptions.Compiled);
-    private static readonly Regex Mode = new(@"/Game/GameModes/(\w+)/", RegexOptions.Compiled);
+    private static readonly Regex Mode = new(@"/Game/GameModes/([\w/]+)", RegexOptions.Compiled);
 
     public static GameEvent? Parse(string line)
     {
@@ -71,6 +72,10 @@ public sealed class GameLogTailer
     private Thread? _thread;
     private volatile bool _stop;
 
+    /// <summary>On the first open, read the log from the start as history (then a CaughtUp
+    /// marker), so ValSpot started mid-match knows where the match is.</summary>
+    public bool CatchUp { get; set; }
+
     public GameLogTailer(string path, ConcurrentQueue<GameEvent> output)
     {
         _path = path;
@@ -90,6 +95,7 @@ public sealed class GameLogTailer
         FileStream? fs = null;
         (uint vol, ulong idx)? ident = null;
         bool firstOpen = true;
+        bool history = false;
         var pending = new StringBuilder();
         var buf = new byte[64 * 1024];
         var chars = new char[64 * 1024 + 8];
@@ -132,8 +138,11 @@ public sealed class GameLogTailer
                     fs = new FileStream(_path, FileMode.Open, FileAccess.Read,
                         FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.SequentialScan);
                     ident = FileId(_path);
-                    // first open: skip history; a fresh log after rotation: read all of it
-                    fs.Seek(0, firstOpen ? SeekOrigin.End : SeekOrigin.Begin);
+                    // first open: skip history (or read it as history when catching up);
+                    // a fresh log after rotation: read all of it
+                    history = firstOpen && CatchUp;
+                    fs.Seek(0, firstOpen && !CatchUp ? SeekOrigin.End : SeekOrigin.Begin);
+                    if (firstOpen && !CatchUp) _out.Enqueue(new GameEvent(GameEventKind.CaughtUp, "", 0, DateTime.UtcNow));
                     firstOpen = false;
                     pending.Clear();
                     decoder.Reset();
@@ -141,6 +150,11 @@ public sealed class GameLogTailer
                 int n = fs!.Read(buf, 0, buf.Length);
                 if (n <= 0)
                 {
+                    if (history)
+                    {
+                        history = false;
+                        _out.Enqueue(new GameEvent(GameEventKind.CaughtUp, "", 0, DateTime.UtcNow));
+                    }
                     Thread.Sleep(100);
                     continue;
                 }
@@ -152,7 +166,7 @@ public sealed class GameLogTailer
                 foreach (string raw in text.Substring(0, last).Split('\n'))
                 {
                     var ev = GameLogParser.Parse(raw);
-                    if (ev != null) _out.Enqueue(ev.Value);
+                    if (ev != null) _out.Enqueue(history ? ev.Value with { History = true } : ev.Value);
                 }
                 pending.Clear();
                 pending.Append(text, last + 1, text.Length - last - 1);

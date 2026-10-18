@@ -1,4 +1,4 @@
-ValSpot 3 - your music plays while you're dead or in the VALORANT buy phase
+ValSpot 3 - your music plays while you're dead, in the buy phase, or back in the lobby
 ============================================================================
 
 What it does
@@ -6,10 +6,13 @@ What it does
   - Seconds before barriers drop .. music fades out (you pick how many)
   - You die ....................... music fades in, until the next round goes live
   - Round live and you're alive ... silent
-  - Match over .................... silent
+  - Back in the lobby ............. music fades in (can be turned off)
+  - Shooting Range ................ left alone
 
 Works with Spotify, or whatever app is playing (YouTube Music, Apple Music,
 Tidal, a browser...). Any monitor and resolution, ultrawide and G9 included.
+Standard matches and Swiftplay; other modes learn their timing by themselves.
+Started it in the middle of a match? It reads the match so far and joins in.
 
 How to use it
   1. Put ValSpot.exe somewhere it can stay (Desktop, Documents...).
@@ -32,8 +35,8 @@ First launch: "Windows protected your PC"
 
 Death detection
   ValSpot watches for the "SWITCH PLAYER" line VALORANT shows under your
-  teammate's name while you spectate. The first time you die it learns
-  exactly where that line is on your screen and remembers it.
+  teammate's name while you spectate. Common screen sizes (all 16:9, 21:9,
+  32:9 like the Samsung G9, 16:10) are built in, so nothing to set up.
   Game not in English, or it never notices you died? Right-click the tray
   icon > "Learn my death screen", die and spectate, click Capture, and
   drag a box around that line once.

@@ -39,6 +39,7 @@ public partial class SettingsWindow : Window
         _loading = true;
         PlayOnDeath.IsChecked = S.PlayOnDeath;
         PlayInBuy.IsChecked = S.PlayInBuy;
+        PlayInLobby.IsChecked = S.PlayInLobby;
         LeadSlider.Value = S.PauseLeadSeconds;
         Fade.IsChecked = S.Fade;
         FadeSlider.Value = S.FadeSeconds;
@@ -61,6 +62,7 @@ public partial class SettingsWindow : Window
     {
         PlayOnDeath.Click += (_, _) => Save(() => S.PlayOnDeath = PlayOnDeath.IsChecked == true);
         PlayInBuy.Click += (_, _) => Save(() => S.PlayInBuy = PlayInBuy.IsChecked == true);
+        PlayInLobby.Click += (_, _) => Save(() => S.PlayInLobby = PlayInLobby.IsChecked == true);
         Fade.Click += (_, _) => Save(() => S.Fade = Fade.IsChecked == true);
         LeadSlider.ValueChanged += (_, _) => Save(() => S.PauseLeadSeconds = Math.Round(LeadSlider.Value, 1));
         FadeSlider.ValueChanged += (_, _) => Save(() => S.FadeSeconds = Math.Round(FadeSlider.Value, 1));

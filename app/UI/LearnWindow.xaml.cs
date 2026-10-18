@@ -26,6 +26,15 @@ public partial class LearnWindow : Window
         InitializeComponent();
         SourceInitialized += (_, _) => DarkTitleBar.Apply(this);
         Closed += (_, _) => _frame?.Dispose();
+        var r = _engine.Window.FindRect();
+        if (r is { } w && (S.DeathSeen.Contains(w.Key) || DeathDetector.IsPreset(w)))
+        {
+            Step.Text = (S.DeathSeen.Contains(w.Key)
+                            ? $"Your screen ({w.Key}) is already set up: ValSpot has seen your death screen. "
+                            : $"Your screen size ({w.Key}) is a built-in preset, so English clients work without this. ") +
+                        "You only need this if death music never starts, or your game isn't in English. " +
+                        "To use it: die, spectate a teammate, click Capture, and switch to VALORANT within 5 seconds.";
+        }
     }
 
     private Settings S => _engine.S;
@@ -64,17 +73,34 @@ public partial class LearnWindow : Window
             return;
         }
         var r = rect.Value;
-        _frame?.Dispose();
-        _frame = new DesktopScreen().GrabColor(r);
-        Activate();
         _rect0 = new Core.Rect(0, 0, r.W, r.H);
-        Result.Text = "Looking for the SWITCH PLAYER line…";
-        var frame = ToFrame(_frame);
-        var hit = await Task.Run(() =>
+        Result.Text = "Capturing…";
+        // a burst of 8 frames over ~2 s, keeping the best: one frame can land on a moment where a
+        // bright effect sits behind the text
+        var (bestBmp, hit) = await Task.Run(() =>
         {
-            var det = new DeathDetector(S, frame);
-            return det.WideSearch(_rect0, null, new[] { 0.80, 0.94, 1.06, 1.20 });
+            var screen = new DesktopScreen();
+            Bitmap? keep = null;
+            var best = new WideHit(-1, default, "");
+            for (int i = 0; i < 8; i++)
+            {
+                var bmp = screen.GrabColor(r);
+                var h = new DeathDetector(S, ToFrame(bmp)).WideSearch(_rect0, null, new[] { 0.80, 0.94, 1.06, 1.20 });
+                if (h.Score > best.Score)
+                {
+                    keep?.Dispose();
+                    keep = bmp;
+                    best = h;
+                }
+                else bmp.Dispose();
+                if (best.Score >= 0.95) break;
+                System.Threading.Thread.Sleep(150);
+            }
+            return (keep!, best);
         });
+        Activate();
+        _frame?.Dispose();
+        _frame = bestBmp;
 
         _area = DeathDetector.WideArea(_rect0);
         ShowArea();
@@ -217,7 +243,7 @@ public partial class LearnWindow : Window
 
         // check it against the same capture before trusting it
         var check = new DeathDetector(S, ToFrame(_frame));
-        var (score, name) = check.Score(_rect0);
+        var (score, name, _) = check.Score(_rect0);
         if (score >= S.DeathThreshold)
         {
             _engine.Detector.SaveCalibration(_rect0, tr, "your own marker");

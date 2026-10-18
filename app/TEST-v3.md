@@ -1,4 +1,4 @@
-# ValSpot 3 (C#) test sheet - 2026-10-18
+# ValSpot 3 (C#) test sheet - 2026-10-18 (updated for 3.0.1)
 
 Built and checked offline. This is the first test on your real setup. Takes one match.
 
@@ -28,7 +28,7 @@ Close any older ValSpot first (the Python one in the tray/console, `dist*`, or `
 | You die | **fades in** about 1 s after "SWITCH PLAYER" shows | green |
 | First death only | pop-up "ValSpot calibrated" | |
 | Next buy phase | keeps playing | green |
-| Match end | fades out | grey |
+| Match end, back in the lobby | **fades in** (setting: Play when you're back in the lobby) | grey |
 
 ## 3. Things to try on purpose
 
@@ -38,6 +38,13 @@ Close any older ValSpot first (the Python one in the tray/console, `dist*`, or `
 - **Settings > Stop before the round starts**: move to 5 s; the next buy phase should fade out 5 s early.
 - **Settings > Fade in and out** off: the next change is an instant play/pause.
 - **Learn my death screen** (optional): while dead and spectating, click Capture, switch to VALORANT within 5 s. Expect "Found it" with a green box on the SWITCH PLAYER line.
+
+## 3.0.1 additions
+
+- **Swiftplay:** the round-5 buy phase (after the side swap) is 45 s; music should stop ~3 s before it ends, not 18 s early.
+- **Start ValSpot mid-match:** quit it during a buy phase, start it again. Log says `caught up on the match so far: in a ... match, round N, buy phase` and music plays.
+- **Shooting Range:** opening it no longer plays music for 27 s.
+- **Learn my death screen:** says your screen is already set up (preset size). Only needed for non-English clients.
 
 ## 4. Check your volume afterwards
 

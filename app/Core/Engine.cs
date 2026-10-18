@@ -34,15 +34,20 @@ public sealed class Engine : IDisposable
     private DateTime _gameCheckAt = DateTime.MinValue;
 
     public bool GameRunning { get; private set; }
+    /// <summary>Tests: catch up on the log even if VALORANT isn't running.</summary>
+    public static bool ForceCatchUp { get; set; }
     public string WindowKey => _lastRect?.Key ?? "";
-    public bool CalibratedNow => _lastRect is { } r && Detector.Calibrated(r);
+    public bool CalibratedNow => _lastRect is { } r && (Detector.Learned(r) || S.DeathSeen.Contains(r.Key));
     public double LastScore { get; private set; }
     public string Problem { get; private set; } = "";
     public Status Status { get; private set; } = Status.NoGame;
     public event Action? StatusChanged;
     public event Action<string, string>? Notify;   // title, text (tray balloon)
 
-    public static string LogPath =>
+    /// <summary>Tests can point the engine at another log file.</summary>
+    public static string? LogPathOverride { get; set; }
+
+    public static string LogPath => LogPathOverride ??
         Environment.ExpandEnvironmentVariables(@"%LOCALAPPDATA%\VALORANT\Saved\Logs\ShooterGame.log");
 
     public Engine(Settings s, IScreen? screen = null, bool dryRun = false)
@@ -69,6 +74,14 @@ public sealed class Engine : IDisposable
         if (!File.Exists(LogPath)) Log.Write($"NOTE VALORANT log not found yet at {LogPath} (fine if the game isn't running)");
         Log.Write($"music app: {Media.Describe()}; death templates: {Detector.Templates.Count}" +
                   (Detector.Templates.Any(t => t.Custom) ? " (incl. your own)" : ""));
+        // started while VALORANT is running and its log is fresh: read the match so far first
+        try
+        {
+            _tailer.CatchUp = ForceCatchUp || GameWindow.GameRunning() && File.Exists(LogPath)
+                              && (DateTime.UtcNow - File.GetLastWriteTimeUtc(LogPath)).TotalMinutes < 5;
+        }
+        catch { _tailer.CatchUp = false; }
+        if (_tailer.CatchUp) Rules.Quiet = true;
         _tailer.Start();
         _thread = new Thread(Loop) { IsBackground = true, Name = "ValSpot engine" };
         _thread.Start();
@@ -96,11 +109,32 @@ public sealed class Engine : IDisposable
     {
         while (_events.TryDequeue(out var ev))
         {
+            if (ev.Kind == GameEventKind.CaughtUp)
+            {
+                if (Rules.Quiet)
+                {
+                    Rules.Tick(now);              // a buy phase that already ran out
+                    Rules.Quiet = false;
+                    Log.Write($"caught up on the match so far: {Rules.Describe()}");
+                    Rules.ApplyCurrent("ValSpot started mid-match");
+                    Recompute();
+                }
+                continue;
+            }
+            if (ev.History)
+            {
+                // the log's clock is UTC; run the rules on the time each line happened
+                var at = DateTime.SpecifyKind(ev.Stamp, DateTimeKind.Utc).ToLocalTime();
+                Rules.Tick(at);
+                Rules.Handle(ev, at);
+                continue;
+            }
             if (ev.Kind is GameEventKind.Buy or GameEventKind.Combat or GameEventKind.MatchStart) Detector.Reset();
-            if (ev.Kind == GameEventKind.MatchEnd && _lastRect is { } lr && !Detector.Calibrated(lr) && Rules.InMatch)
-                Log.Write($"NOTE death screen not seen yet at {lr.Key}; still calibrating (needs one death where you spectate a teammate)");
+            if (ev.Kind == GameEventKind.MatchEnd && _lastRect is { } lr && !S.DeathSeen.Contains(lr.Key) && Rules.InMatch)
+                Log.Write($"NOTE death screen not seen yet at {lr.Key} (needs one death where you spectate a teammate)");
             Rules.Handle(ev, now);
         }
+        if (Rules.Quiet) return;                  // still reading the match so far
         Rules.Tick(now);
 
         if ((now - _gameCheckAt).TotalSeconds >= 2)
@@ -140,7 +174,8 @@ public sealed class Engine : IDisposable
             var vp = DeathDetector.Viewport(r);
             var tr = Detector.TransformFor(r);
             Log.Write($"game window {r.W}x{r.H} at {r.X},{r.Y}; 16:9 picture {vp.W}x{vp.H}; " +
-                      $"{(Detector.Calibrated(r) ? "calibrated" : "not calibrated yet")} (offset {tr.Ox:0},{tr.Oy:0} scale {tr.K:0.000})");
+                      $"{(Detector.Learned(r) ? "learned on this PC" : DeathDetector.IsPreset(r) ? "preset size" : "not calibrated yet")} " +
+                      $"(offset {tr.Ox:0},{tr.Oy:0} scale {tr.K:0.000})");
         }
         _lastRect = r;
 
@@ -158,7 +193,11 @@ public sealed class Engine : IDisposable
                 && Rules.Phase == Phase.Combat && !Rules.Dead)
                 Rules.SetDead(true, "you died (found while calibrating)");
         }
-        if (_wide == null && !Rules.Dead && !Detector.Calibrated(r)
+        // presets skip this; but if a preset size still hasn't seen a death after 4 rounds,
+        // its HUD may sit elsewhere on this PC, so search as a safety net
+        bool search = !Detector.Calibrated(r)
+                      || (!Detector.Learned(r) && !S.DeathSeen.Contains(r.Key) && Rules.RoundsThisMatch >= 4);
+        if (_wide == null && !Rules.Dead && search
             && (now - _wideAt).TotalSeconds >= S.CalibrateIntervalSeconds)
         {
             _wideAt = now;
@@ -166,7 +205,7 @@ public sealed class Engine : IDisposable
             var area = Detector.Screen.Grab(DeathDetector.WideArea(r));
             _wide = Task.Run(() => Detector.WideSearch(r, area));
         }
-        if (S.Diagnostics && !Detector.Calibrated(r)) _diag.Tick(now, r);
+        if (S.Diagnostics && !S.DeathSeen.Contains(r.Key)) _diag.Tick(now, r);
     }
 
     public void ReportProblem(string problem)

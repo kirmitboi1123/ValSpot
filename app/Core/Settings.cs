@@ -28,6 +28,7 @@ public sealed class Settings
     // --- what the user sees in the settings window
     public bool PlayOnDeath { get; set; } = true;
     public bool PlayInBuy { get; set; } = true;
+    public bool PlayInLobby { get; set; } = true;
     public double PauseLeadSeconds { get; set; } = 3.0;
     public bool Fade { get; set; } = true;
     public double FadeSeconds { get; set; } = 0.8;
@@ -41,10 +42,15 @@ public sealed class Settings
     public bool OnlyWhenFocused { get; set; } = true;
     public int BuySeconds { get; set; } = 30;
     public int FirstBuySeconds { get; set; } = 45;
-    public int HalfTimeRound { get; set; } = 11;
+    /// <summary>Round index after which the long side-swap buy phase comes, per mode. Standard
+    /// matches swap after round 12 (index 11), Swiftplay after round 4 (index 3); other modes
+    /// are learned the first time a long mid-match buy phase shows up.</summary>
+    public Dictionary<string, int> HalfTimeByMode { get; set; } = new() { ["Bomb"] = 11, ["Swiftplay"] = 3 };
     public int PollHz { get; set; } = 8;
     public double DeathThreshold { get; set; } = 0.60;
     public double CalibrateThreshold { get; set; } = 0.80;
+    /// <summary>Hand-drawn markers have to match this well (they're less tested than the built-in ones).</summary>
+    public double CustomThreshold { get; set; } = 0.80;
     public int ConfirmFrames { get; set; } = 3;
     public int ReviveFrames { get; set; } = 32;
     public int SearchPad { get; set; } = 4;
@@ -56,6 +62,8 @@ public sealed class Settings
     // --- written by ValSpot
     public Dictionary<string, Calibration> Calibration { get; set; } = new();
     public List<TemplateSpec> CustomTemplates { get; set; } = new();
+    /// <summary>Window sizes where a death has been seen at least once (stops diagnostics).</summary>
+    public HashSet<string> DeathSeen { get; set; } = new();
     /// <summary>Per-process app volume before a fade; restored if ValSpot stopped mid-fade.</summary>
     public Dictionary<string, float> FadeBaselines { get; set; } = new();
     public bool FadeInProgress { get; set; }

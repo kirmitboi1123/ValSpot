@@ -35,6 +35,7 @@ public static class Cli
                 "--fade-test" => FadeTest(),
                 "--render" => Render(a),
                 "--bench" => Bench(),
+                "--catchup-test" => CatchUpTest(),
                 "--version" => Print(Program.Version),
                 _ => Print("commands: --replay LOG | --eval --ffmpeg F --height H [--canvas WxH] [--naive] CLIP... | --check | --media | --fade-test | --render DIR | --bench"),
             };
@@ -84,6 +85,32 @@ public static class Cli
         return 0;
     }
 
+    // -------------------------------------------------------------- catch-up
+    /// <summary>Fake log, as if ValSpot started 10 s into round 2's buy phase; then the round goes live.</summary>
+    private static int CatchUpTest()
+    {
+        var s = TempSettings();
+        string log = Path.Combine(Settings.Dir, "ShooterGame.log");
+        string L(DateTime utc, string text) => $"[{utc:yyyy.MM.dd-HH.mm.ss:fff}][  1]{text}\n";
+        var now = DateTime.UtcNow;
+        File.WriteAllText(log,
+            L(now.AddSeconds(-210), "LogMapLoadModel: Update: [Map Name: Ascent] /Game/GameModes/Bomb/BombGameMode") +
+            L(now.AddSeconds(-200), "LogGameFlowStateManager: [PlatformTime: 1.0] Transitioning from TransitionToInGame to InGame") +
+            L(now.AddSeconds(-155), "LogShooterGameState: Warning: Gameplay started at local time 45.000000 (server time 45.0)") +
+            L(now.AddSeconds(-11), "LogShooterGameState: Warning: AShooterGameState::OnRoundEnded for round '0'") +
+            L(now.AddSeconds(-10), "LogShooterGameState: Warning: Gameplay started at local time 0.050000 (server time 0.0)"));
+        Engine.LogPathOverride = log;
+        Engine.ForceCatchUp = true;
+        using var engine = new Engine(s, new FrameScreen(new byte[3], 1, 1), dryRun: true);
+        engine.Start();
+        Thread.Sleep(1500);
+        Console.WriteLine($"state after catch-up: {engine.Rules.Describe()}; music wanted: {engine.Rules.MusicWanted}; pause at in {(engine.Rules.PauseAt - DateTime.Now)?.TotalSeconds:0} s");
+        File.AppendAllText(log, L(DateTime.UtcNow, "LogShooterGameState: Warning: Gameplay started at local time 30.000000 (server time 30.0)"));
+        Thread.Sleep(1500);
+        Console.WriteLine($"after barriers drop: {engine.Rules.Describe()}; music wanted: {engine.Rules.MusicWanted}");
+        return 0;
+    }
+
     // -------------------------------------------------------------- eval
     private static int Eval(string[] a)
     {
@@ -98,12 +125,24 @@ public static class Cli
             H = int.Parse(p[1], CultureInfo.InvariantCulture);
         }
         DeathDetector.NaiveGeometry = Flag(a, "--naive");
+        DeathDetector.DisablePresets = Flag(a, "--naive");   // "geometry unknown" = not a known size either
         var clips = a.Skip(1).Where(x => x.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase)).ToList();
+        string? customPng = Arg(a, "--custom");
+        int cx = int.Parse(Arg(a, "--cx") ?? "0", CultureInfo.InvariantCulture), cy = int.Parse(Arg(a, "--cy") ?? "0", CultureInfo.InvariantCulture);
+        bool customOnly = Flag(a, "--custom-only");
         var rect = new Rect(0, 0, W, H);
         foreach (var clip in clips)
         {
             var s = TempSettings();
+            if (customPng != null)
+            {
+                Directory.CreateDirectory(Path.Combine(Settings.Dir, "templates"));
+                File.Copy(customPng, Path.Combine(Settings.Dir, "templates", "custom.png"), true);
+                s.CustomTemplates.Add(new TemplateSpec { File = "templates/custom.png", X = cx, Y = cy, RefHeight = 1080 });
+            }
             var det = new DeathDetector(s, new FrameScreen(new byte[3], 1, 1));
+            if (customOnly) det.KeepOnlyCustom();
+            if (customPng != null) foreach (var t in det.Templates.Where(t => t.Custom)) Console.WriteLine($"  custom marker after trim: {t.W}x{t.H} at {t.X},{t.Y}");
             string vf = $"fps=2,scale={cw}:{ch}:flags=bicubic,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black";
             var psi = new ProcessStartInfo(ff, $"-hide_banner -loglevel error -threads 1 -i \"{clip}\" -vf \"{vf}\" -f rawvideo -pix_fmt rgb24 -")
             {
@@ -117,13 +156,27 @@ public static class Cli
             int frameBytes = W * H * 3;
             var buf = new byte[frameBytes];
             var rows = new List<(double t, double s)>();
+            var passes = new List<bool>();
             double? calAt = null;
             var wideMs = new List<double>();
             int i = 0;
             while (ReadFull(stream, buf))
             {
                 det.Screen = new FrameScreen((byte[])buf.Clone(), W, H);
-                double sc = det.Score(rect).score;
+                var sp = det.Score(rect);
+                double sc = sp.score;
+                bool passed = sp.passed;
+                if (Flag(a, "--wide-only"))
+                {
+                    // the wide search alone, on every frame (what "Learn my death screen" relies on)
+                    var hit = det.WideSearch(rect, null, new[] { 0.80, 0.94, 1.06, 1.20 });
+                    rows.Add((i / 2.0, sc));
+                    passes.Add(passed);
+                    wideMs.Add(hit.Score);
+                    if (sc >= s.DeathThreshold) Console.WriteLine($"  t={i / 2.0}: spot {sc:0.00} wide {hit.Score:0.00} at {hit.Tr.Ox:0},{hit.Tr.Oy:0} x{hit.Tr.K:0.000}");
+                    i++;
+                    continue;
+                }
                 if (!det.Calibrated(rect))
                 {
                     var sw = Stopwatch.StartNew();
@@ -133,20 +186,24 @@ public static class Cli
                     if (ok)
                     {
                         calAt = i / 2.0;
-                        sc = det.Score(rect).score;
+                        var sp2 = det.Score(rect); // after calibration
+                        sc = sp2.score;
+                        passed = sp2.passed;
                     }
                 }
                 rows.Add((i / 2.0, sc));
+                passes.Add(passed);
                 i++;
             }
             proc.WaitForExit();
             double th = s.DeathThreshold;
-            var dead = rows.Where(r => r.s >= th).Select(r => r.t).ToList();
-            double maxNot = rows.Where(r => r.s < th).Select(r => r.s).DefaultIfEmpty(0).Max();
+            var dead = rows.Where((r, k) => k < passes.Count ? passes[k] : r.s >= th).Select(r => r.t).ToList();
+            double maxNot = rows.Where((r, k) => !(k < passes.Count ? passes[k] : r.s >= th)).Select(r => r.s).DefaultIfEmpty(0).Max();
+            double minDead = rows.Where((r, k) => k < passes.Count && passes[k]).Select(r => r.s).DefaultIfEmpty(0).Min();
             s.Calibration.TryGetValue(rect.Key, out var c);
             Console.WriteLine($"{Path.GetFileName(clip)} window {W}x{H} picture {cw}x{ch}{(DeathDetector.NaiveGeometry ? " naive" : "")}: " +
                               $"frames={rows.Count} dead={dead.Count} dead-span={(dead.Count > 0 ? $"{dead[0]}-{dead[^1]}s" : "-")} " +
-                              $"max-not-dead={maxNot:+0.00;-0.00} calibrated-at={(calAt.HasValue ? calAt + "s" : "-")} " +
+                              $"max-not-dead={maxNot:+0.00;-0.00} min-dead={minDead:0.00} calibrated-at={(calAt.HasValue ? calAt + "s" : "-")} " +
                               $"saved={(c == null ? "none" : $"{c.Ox},{c.Oy} x{c.K}")} " +
                               (wideMs.Count > 0 ? $"wide-search={wideMs.Average():0}ms/frame" : ""));
             if (Flag(a, "--verbose")) Console.WriteLine("  " + string.Join(" ", rows.Select(r => $"{r.t}:{r.s:0.00}")));
@@ -179,7 +236,7 @@ public static class Cli
             if (r == null) Console.WriteLine($"{DateTime.Now:HH:mm:ss} VALORANT window not found");
             else
             {
-                var (sc, name) = det.Score(r.Value);
+                var (sc, name, _) = det.Score(r.Value);
                 var hit = det.WideSearch(r.Value);
                 double mean = det.Screen.Grab(new Rect(r.Value.X, r.Value.Y + r.Value.H / 2, r.Value.W / 2, r.Value.H / 2)).Mean();
                 Console.WriteLine($"{DateTime.Now:HH:mm:ss} window {r.Value.W}x{r.Value.H} at {r.Value.X},{r.Value.Y} brightness={mean:0} " +

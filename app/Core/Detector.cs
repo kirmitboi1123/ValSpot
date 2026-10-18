@@ -22,14 +22,53 @@ public sealed class Template
     public float[] Tzc = Array.Empty<float>();
     public double NormC;
 
+    /// <summary>Brightness step for hand-drawn markers: only near-white counts.</summary>
+    public const float StrictLo = 205f, StrictSpan = 35f;
+
     public static Template FromImage(string name, GrayImage gray, int x, int y, double refHeight, bool custom)
     {
         var t = new Template { Name = name, X = x, Y = y, RefHeight = refHeight, Custom = custom };
-        var b = gray.Bright();
+        var b = custom ? gray.Bright(StrictLo, StrictSpan) : gray.Bright();
+        if (custom)
+        {
+            // a hand-drawn box usually has loose background around the line, and a light wall
+            // behind it passes the normal brightness step (a beige wall made one match at 0.63
+            // while alive). Hand-drawn markers therefore count only near-white pixels (the
+            // prompt text is ~240+, that wall ~197), keep the text plus 2 px, and zero the rest
+            var (bx, by, bw, bh) = BrightBox(b, 0.5f, 2);
+            if (bw >= 12 && bh >= 6 && (bw < b.W || bh < b.H))
+            {
+                b = b.Crop(bx, by, bw, bh);
+                t.X += bx;
+                t.Y += by;
+            }
+            for (int i = 0; i < b.P.Length; i++)
+                if (b.P[i] < 0.25f) b.P[i] = 0f;
+        }
         (t.W, t.H, t.Tz, t.Norm) = ZeroMean(b);
         var c = b.Resize(Math.Max(1, b.W / 2), Math.Max(1, b.H / 2));
         (t.Wc, t.Hc, t.Tzc, t.NormC) = ZeroMean(c);
         return t;
+    }
+
+    private static (int x, int y, int w, int h) BrightBox(GrayImage b, float min, int pad)
+    {
+        int x0 = b.W, y0 = b.H, x1 = -1, y1 = -1;
+        for (int y = 0; y < b.H; y++)
+            for (int x = 0; x < b.W; x++)
+                if (b.P[y * b.W + x] >= min)
+                {
+                    if (x < x0) x0 = x;
+                    if (y < y0) y0 = y;
+                    if (x > x1) x1 = x;
+                    if (y > y1) y1 = y;
+                }
+        if (x1 < 0) return (0, 0, b.W, b.H);
+        x0 = Math.Max(0, x0 - pad);
+        y0 = Math.Max(0, y0 - pad);
+        x1 = Math.Min(b.W - 1, x1 + pad);
+        y1 = Math.Min(b.H - 1, y1 + pad);
+        return (x0, y0, x1 - x0 + 1, y1 - y0 + 1);
     }
 
     private static (int, int, float[], double) ZeroMean(GrayImage g)
@@ -62,6 +101,7 @@ public sealed class DeathDetector
     /// <summary>Swapped as a whole on reload, so the engine thread never sees a half-built list.</summary>
     public List<Template> Templates { get; private set; } = new();
     private int _hits, _misses;
+    private bool _deadByCustom;
     private Transform? _wideLast;
     private int _wideCount;
 
@@ -73,6 +113,9 @@ public sealed class DeathDetector
     }
 
     public bool Enabled => Templates.Count > 0;
+
+    /// <summary>Tests: drop the built-in markers.</summary>
+    public void KeepOnlyCustom() => Templates = Templates.Where(t => t.Custom).ToList();
 
     public void LoadTemplates()
     {
@@ -92,8 +135,10 @@ public sealed class DeathDetector
                 Log.Write($"WARN custom template missing: {c.File}");
                 continue;
             }
-            using var fs = File.OpenRead(p);
-            list.Add(Template.FromImage(Path.GetFileNameWithoutExtension(p), GrayImage.FromPngStream(fs), c.X, c.Y, c.RefHeight, true));
+            GrayImage img;
+            using (var fs = File.OpenRead(p)) img = GrayImage.FromPngStream(fs);
+            string nm = Path.GetFileNameWithoutExtension(p);
+            list.Add(Template.FromImage(nm, img, c.X, c.Y, c.RefHeight, true));
         }
         Templates = list;
     }
@@ -120,7 +165,26 @@ public sealed class DeathDetector
         return r;
     }
 
-    public bool Calibrated(Rect r) => _s.Calibration.ContainsKey(r.Key);
+    /// <summary>Window sizes ValSpot already knows the layout of (the 16:9 picture geometry is
+    /// exact for them): every 16:9 size, plus common 21:9, 32:9 (Samsung G9) and 16:10 sizes.
+    /// They count as set up from the first launch; no learning needed.</summary>
+    /// <summary>Test switch: treat no size as a preset.</summary>
+    public static bool DisablePresets { get; set; }
+
+    public static bool IsPreset(Rect r)
+    {
+        if (DisablePresets) return false;
+        if ((long)r.W * 9 == (long)r.H * 16) return true;
+        return r.Key is "3440x1440" or "2560x1080" or "3840x1600" or "5120x2160"
+            or "5120x1440" or "3840x1080" or "7680x2160" or "2560x720"
+            or "1920x1200" or "2560x1600" or "1680x1050" or "1440x900" or "2880x1800" or "3840x2400";
+    }
+
+    /// <summary>Saved calibration for this size, or a known preset size.</summary>
+    public bool Calibrated(Rect r) => _s.Calibration.ContainsKey(r.Key) || IsPreset(r);
+
+    /// <summary>Only a calibration found on this PC (not a preset).</summary>
+    public bool Learned(Rect r) => _s.Calibration.ContainsKey(r.Key);
 
     public Transform TransformFor(Rect r, double refHeight = 1080)
     {
@@ -158,56 +222,67 @@ public sealed class DeathDetector
         return (box, pw, ph);
     }
 
-    /// <summary>Best match score at the expected spot (one screenshot covers every template).</summary>
-    public (double score, string name) Score(Rect r)
+    /// <summary>Best match at the expected spot (one screenshot covers every template).
+    /// Passed = some template beat its own bar (hand-drawn markers need CustomThreshold).</summary>
+    public (double score, string name, bool passed) Score(Rect r)
     {
-        if (Templates.Count == 0) return (-1, "");
+        if (Templates.Count == 0) return (-1, "", false);
         var jobs = Templates.Select(t => (t, BoxFor(t, r, TransformFor(r, t.RefHeight)))).ToList();
         int x0 = jobs.Min(j => j.Item2.box.X), y0 = jobs.Min(j => j.Item2.box.Y);
         int x1 = jobs.Max(j => j.Item2.box.X + j.Item2.box.W), y1 = jobs.Max(j => j.Item2.box.Y + j.Item2.box.H);
         var whole = Screen.Grab(new Rect(x0, y0, x1 - x0, y1 - y0));
-        double best = -1;
-        string name = "";
+        double best = -1, bestPass = -1;
+        string name = "", passName = "";
         foreach (var (t, (box, pw, ph)) in jobs)
         {
-            var patch = whole.Crop(box.X - x0, box.Y - y0, box.W, box.H).Resize(pw, ph).Bright();
+            var scaled = whole.Crop(box.X - x0, box.Y - y0, box.W, box.H).Resize(pw, ph);
+            var patch = t.Custom ? scaled.Bright(Template.StrictLo, Template.StrictSpan) : scaled.Bright();
             double s = BestAround(patch, t, 0, 0, patch.W - t.W, patch.H - t.H);
             if (s > best)
             {
                 best = s;
                 name = t.Name;
             }
+            double bar = t.Custom ? Math.Max(_s.DeathThreshold, _s.CustomThreshold) : _s.DeathThreshold;
+            if (s >= bar && s > bestPass)
+            {
+                bestPass = s;
+                passName = t.Name;
+            }
         }
-        return (best, name);
+        return bestPass >= 0 ? (bestPass, passName, true) : (best, name, false);
     }
 
     public void Reset()
     {
         _hits = 0;
         _misses = 0;
+        _deadByCustom = false;
     }
 
     /// <summary>New dead/alive state: ConfirmFrames with the marker to go dead,
     /// ReviveFrames without it to come back alive.</summary>
     public bool Check(bool dead, Rect r, out double score)
     {
-        var (s, name) = Score(r);
+        var (s, name, passed) = Score(r);
         score = s;
-        if (s >= _s.DeathThreshold)
+        if (passed)
         {
             _misses = 0;
             _hits++;
             if (!dead && _hits >= _s.ConfirmFrames)
             {
-                Log.Write($"DEAD  marker '{name}' score {s:0.00}");
+                _deadByCustom = Templates.Any(t => t.Custom && t.Name == name);
+                Log.Write($"DEAD  marker '{name}' score {s:0.00}" + (_deadByCustom ? " (your marker: music stays on until the round ends)" : ""));
                 if (!Calibrated(r)) SaveCalibration(r, TransformFor(r), "seen at the expected spot");
+                if (_s.DeathSeen.Add(r.Key)) _s.Save();
                 return true;
             }
         }
         else
         {
             _hits = 0;
-            if (dead)
+            if (dead && !_deadByCustom)   // a hand-drawn marker may only match one prompt size
             {
                 _misses++;
                 if (_misses >= _s.ReviveFrames)
@@ -246,7 +321,7 @@ public sealed class DeathDetector
             var ci = new Integral(coarse);
             foreach (var t in Templates)
             {
-                if (img.W < t.W || img.H < t.H) continue;
+                if (t.Custom || img.W < t.W || img.H < t.H) continue;   // hand-drawn markers already know their spot
                 foreach (var (cx, cy) in CoarseCandidates(coarse, ci, t, 6))
                 {
                     int fx = cx * 2, fy = cy * 2;

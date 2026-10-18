@@ -11,7 +11,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>ValSpot</AssemblyName>
     <RootNamespace>ValSpot</RootNamespace>
-    <Version>3.0.0</Version>
+    <Version>3.0.1</Version>
     <Product>ValSpot</Product>
     <Description>Plays your music while you're dead or in the VALORANT buy phase.</Description>
     <ApplicationManifest>app.manifest</ApplicationManifest>

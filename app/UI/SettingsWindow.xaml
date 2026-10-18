@@ -48,6 +48,7 @@
         <StackPanel>
           <CheckBox x:Name="PlayOnDeath" Style="{StaticResource Switch}" Content="Play while you're dead"/>
           <CheckBox x:Name="PlayInBuy" Style="{StaticResource Switch}" Content="Play during the buy phase"/>
+          <CheckBox x:Name="PlayInLobby" Style="{StaticResource Switch}" Content="Play when you're back in the lobby"/>
           <DockPanel Margin="0,10,0,2">
             <TextBlock x:Name="LeadText" DockPanel.Dock="Right" Text="3.0 s" Style="{StaticResource Hint}"/>
             <TextBlock Text="Stop before the round starts"/>
