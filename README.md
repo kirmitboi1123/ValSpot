@@ -3,7 +3,7 @@
 Your music plays while you're **dead**, in the **buy phase**, or **back in the lobby** in VALORANT,
 and fades out 3 seconds before the barriers drop. A small Windows tray app; nothing to set up.
 
-**Download:** `ValSpot-share.zip` from the [latest 3.x release](https://github.com/kirmitboi1123/ValSpot/releases/tag/v3.0.2).
+**Download:** `ValSpot-share.zip` from the [latest release](https://github.com/kirmitboi1123/ValSpot/releases/latest).
 Unzip it, run `ValSpot.exe`, play. Windows 10 or 11, 64-bit.
 
 ## What it does
