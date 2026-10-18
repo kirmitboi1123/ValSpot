@@ -54,9 +54,10 @@ Close any older ValSpot first (the Python one in the tray/console, `dist*`, or `
 
 Right-click tray > **Open log folder** and send `valspot.log` (and `diag\` if death music never worked).
 
-## Known open before this test
+## Known open before this test (3.0.1)
 
-- Never run against a live match yet: death detection is verified on your Medal clips, at 1080p, 1440p, 4K, simulated G9 and 16:10.
-- The settings and learn windows were checked as off-screen renders, not clicked through on your screen.
-- "Start with Windows" and the update check were not exercised (no release with v3 exists yet).
-- Fades were checked on Spotify only (volume 1.00 -> 0.60 -> 1.00).
+- Buy timing is confirmed live (your Swiftplay match). Death detection on a live match is not confirmed yet: it passed on your Medal clips at 1080p, 1440p, 4K, simulated G9 and 16:10.
+- Lobby music and the mid-match catch-up were checked by replaying your log, not live.
+- The update check ignores pre-releases, so 3.0.0 won't tell you 3.0.1 exists. Swap the exe by hand.
+- Your hand-drawn marker from today is weak (scores ~0.80 when dead, barely at the bar). It no longer fires while alive. Settings > Forget what it learned removes it; the built-in sizes cover your 4K screen.
+- Fades were checked on Spotify only.
