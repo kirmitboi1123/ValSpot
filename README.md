@@ -3,6 +3,12 @@
 Plays Spotify while you are **dead** or in the **buy phase** of a VALORANT match.
 Pauses it everywhere else, including 3 seconds before the barriers drop.
 
+> **ValSpot 3 (preview)** is a rewrite as a Windows tray app: settings window, fade in/out,
+> any music app (not just Spotify), start with Windows, update check, and "Learn my death screen"
+> for non-English game clients. Source in [`app/`](app/), download from the
+> [3.0.0 pre-release](https://github.com/kirmitboi1123/ValSpot/releases/tag/v3.0.0).
+> It hasn't been tested in a live match yet; the stable version below is 2.1.2.
+
 Start it by double-clicking **`Start valspot.bat`** (or `valspot.exe` from the package), then play.
 Close the window to stop.
 
