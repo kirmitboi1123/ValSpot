@@ -39,7 +39,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "2.1"
+VERSION = "2.1.1"
+
+# numpy's math library starts one worker thread per CPU core and reserves a
+# buffer for each (762 MB reserved on a 32-thread CPU). valspot never needs
+# them; one thread keeps it at ~23 MB reserved / 4 threads.
+for _var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
 
 FROZEN = getattr(sys, "frozen", False)
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -632,25 +638,43 @@ class DeathDetector:
         log(f"CALIBRATED for {key}: offset {ox:.0f},{oy:.0f} scale {k:.3f} ({why}) - saved to config.json")
 
     # -- fast check at the known spot ----------------------------------------
-    def _patch(self, t, rect, tr):
-        from PIL import Image
-        import numpy as np
+    def _box(self, t, rect, tr):
         ox, oy, k = tr
         pw, ph = t["w"] + 2 * self.pad, t["h"] + 2 * self.pad
-        box = (rect[0] + int(round(ox + (t["x"] - self.pad) * k)),
-               rect[1] + int(round(oy + (t["y"] - self.pad) * k)),
-               max(1, int(round(pw * k))), max(1, int(round(ph * k))))
-        g = to_gray(self.screen.grab(box))
+        return (rect[0] + int(round(ox + (t["x"] - self.pad) * k)),
+                rect[1] + int(round(oy + (t["y"] - self.pad) * k)),
+                max(1, int(round(pw * k))), max(1, int(round(ph * k)))), (pw, ph)
+
+    def _prep(self, g, size):
+        from PIL import Image
+        import numpy as np
+        pw, ph = size
         if g.shape != (ph, pw):
             g = np.asarray(Image.fromarray(g, mode="F").resize((pw, ph), Image.BOX), dtype=np.float32)
         return bright(g)
 
+    def _patch(self, t, rect, tr):
+        box, size = self._box(t, rect, tr)
+        return self._prep(to_gray(self.screen.grab(box)), size)
+
     def score(self, rect) -> tuple[float, str]:
-        best, name = -1.0, ""
+        """One screenshot covering every template's spot, then match each."""
+        import numpy as np
+        jobs = []
         for t in self.templates:
-            tr = self.transform(rect, t["ref"])
-            m = ncc_map(self._patch(t, rect, tr), t["g"])
-            s = float(m.max())
+            box, size = self._box(t, rect, self.transform(rect, t["ref"]))
+            jobs.append((t, box, size))
+        if not jobs:
+            return -1.0, ""
+        x0 = min(b[0] for _, b, _ in jobs)
+        y0 = min(b[1] for _, b, _ in jobs)
+        x1 = max(b[0] + b[2] for _, b, _ in jobs)
+        y1 = max(b[1] + b[3] for _, b, _ in jobs)
+        whole = to_gray(self.screen.grab((x0, y0, x1 - x0, y1 - y0)))
+        best, name = -1.0, ""
+        for t, (bx, by, bw, bh), size in jobs:
+            g = np.ascontiguousarray(whole[by - y0:by - y0 + bh, bx - x0:bx - x0 + bw])
+            s = float(ncc_map(self._prep(g, size), t["g"]).max())
             if s > best:
                 best, name = s, t["name"]
         return best, name
