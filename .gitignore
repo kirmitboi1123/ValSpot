@@ -21,3 +21,15 @@ _eval_config.json
 ValSpot/
 ValSpot.lnk
 dist-icon/
+_tools/
+app/bin/
+app/obj/
+app/publish/
+app/ValSpot-share.zip
+app/publish-nocomp/
+_icon/
+_render/
+_cs_tests.ps1
+_*.txt
+_*.n
+exe-test*/

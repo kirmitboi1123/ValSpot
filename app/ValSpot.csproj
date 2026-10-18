@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>ValSpot</AssemblyName>
+    <RootNamespace>ValSpot</RootNamespace>
+    <Version>3.0.0</Version>
+    <Product>ValSpot</Product>
+    <Description>Plays your music while you're dead or in the VALORANT buy phase.</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\valspot.ico</ApplicationIcon>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- WPF needs the DPI setting in app.manifest; the WinForms analyzer only covers WinForms apps -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
+  </PropertyGroup>
+
+  <!-- dotnet publish -c Release: one self-contained exe. Not compressed on purpose: compression
+       makes .NET unpack everything into memory (242 MB in use vs 81 MB uncompressed); the zip
+       download compresses it anyway. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\switch_player.png" LogicalName="switch_player.png" />
+    <EmbeddedResource Include="Assets\switch_player_small.png" LogicalName="switch_player_small.png" />
+    <EmbeddedResource Include="Assets\valspot.ico" LogicalName="valspot.ico" />
+    <Resource Include="Assets\valspot.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
+  </ItemGroup>
+
+</Project>

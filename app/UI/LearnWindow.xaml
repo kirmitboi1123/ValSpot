@@ -1,0 +1,44 @@
+<Window x:Class="ValSpot.UI.LearnWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Learn my death screen - ValSpot" Width="760" Height="600" MinWidth="560" MinHeight="420"
+        WindowStartupLocation="CenterOwner" Background="#0F1923" Icon="/Assets/valspot.png">
+  <Window.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="Theme.xaml"/>
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Window.Resources>
+
+  <DockPanel Margin="20,16">
+    <StackPanel DockPanel.Dock="Top">
+      <TextBlock x:Name="Title1" Text="Teach ValSpot what your death screen looks like" FontSize="18" FontWeight="SemiBold"/>
+      <TextBlock x:Name="Step" Style="{StaticResource Hint}" Margin="0,6,0,12"
+                 Text="In a match, die and spectate a teammate (the line with a mouse icon under their name must be showing). Then click Capture and switch to VALORANT within 5 seconds."/>
+    </StackPanel>
+
+    <DockPanel DockPanel.Dock="Bottom" Margin="0,12,0,0">
+      <Button x:Name="CloseButton" DockPanel.Dock="Right" Content="Close" Click="CloseButton_Click"/>
+      <Button x:Name="SaveButton" DockPanel.Dock="Right" Content="Save this marker" Style="{StaticResource Primary}" Margin="0,0,8,0" Visibility="Collapsed" Click="SaveButton_Click"/>
+      <Button x:Name="CaptureButton" DockPanel.Dock="Left" Content="Capture in 5 s" Style="{StaticResource Primary}" HorizontalAlignment="Left" Click="CaptureButton_Click"/>
+      <TextBlock x:Name="Result" VerticalAlignment="Center" Margin="12,0" Style="{StaticResource Hint}"/>
+    </DockPanel>
+
+    <Border Background="{StaticResource Card}" CornerRadius="10" Padding="8">
+      <Grid x:Name="Stage" ClipToBounds="True">
+        <TextBlock x:Name="Placeholder" Text="The bottom-left of your game will show up here." Style="{StaticResource Hint}"
+                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        <Viewbox x:Name="View" Stretch="Uniform" Visibility="Collapsed">
+          <Grid>
+            <Image x:Name="Shot" Stretch="None"/>
+            <Canvas x:Name="Overlay" Background="Transparent" Cursor="Cross"
+                    MouseLeftButtonDown="Overlay_Down" MouseMove="Overlay_Move" MouseLeftButtonUp="Overlay_Up">
+              <Rectangle x:Name="Sel" Stroke="#1ED760" StrokeThickness="3" Fill="#331ED760" Visibility="Collapsed"/>
+            </Canvas>
+          </Grid>
+        </Viewbox>
+      </Grid>
+    </Border>
+  </DockPanel>
+</Window>
