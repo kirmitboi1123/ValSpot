@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "2.1.1"
+VERSION = "2.1.2"
 
 # numpy's math library starts one worker thread per CPU core and reserves a
 # buffer for each (762 MB reserved on a 32-thread CPU). valspot never needs
