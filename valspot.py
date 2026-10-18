@@ -16,6 +16,7 @@ full sharing (VALORANT can still rename/delete it) and takes tiny screenshots.
 Usage (exe or script)
   valspot                 run (default; what double-clicking does)
   valspot check           print the live death-marker score once a second
+  valspot shot            save a screenshot of the game window in 5 s
   valspot spotify         play 2 s then pause (Spotify control test)
   valspot replay LOG      feed an old ShooterGame.log through the rules (dry-run)
   valspot eval --clips CLIP... --ffmpeg FFMPEG [--height 1440]
@@ -38,7 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-VERSION = "2.0"
+VERSION = "2.1"
 
 FROZEN = getattr(sys, "frozen", False)
 APP_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -88,6 +89,11 @@ DEFAULT_CONFIG = {
     "revive_frames": 32,
     "search_pad": 4,
     "only_when_focused": True,
+    "calibrate_threshold": 0.80,
+    "calibrate_interval": 2.0,
+    "diagnostics": True,
+    "diagnostics_interval": 8.0,
+    "diagnostics_keep": 40,
     "dry_run": False,
     "templates": DEFAULT_TEMPLATES,
 }
@@ -477,14 +483,101 @@ def correlation(a, b) -> float:
     return float((a * b).sum() / den) if den else 0.0
 
 
+class _Prepared:
+    """FFT and integral images of one search image, shared by all templates."""
+
+    def __init__(self, img, fshape):
+        import numpy as np
+        self.img = img
+        self.fshape = fshape
+        self.F = np.fft.rfft2(img, fshape)
+        self.ii = np.pad(img, ((1, 0), (1, 0))).cumsum(0).cumsum(1)
+        self.i2 = np.pad(img * img, ((1, 0), (1, 0))).cumsum(0).cumsum(1)
+
+
+_TPL_FFT: dict = {}
+
+
+def ncc_map(img, tpl, prep: "_Prepared | None" = None):
+    """Normalised cross-correlation of tpl at every valid offset in img
+    (same result as correlation() per window), via FFT + integral images."""
+    import numpy as np
+    H, W = img.shape
+    h, w = tpl.shape
+    if H < h or W < w:
+        return np.full((1, 1), -1.0, np.float32)
+    t0 = tpl - tpl.mean()
+    tn = float(np.sqrt((t0 * t0).sum()))
+    if tn == 0:
+        return np.zeros((H - h + 1, W - w + 1), np.float32)
+    fshape = prep.fshape if prep is not None else (H + h - 1, W + w - 1)
+    key = (id(tpl), fshape)
+    Ft = _TPL_FFT.get(key)
+    if Ft is None:
+        Ft = np.fft.rfft2(t0[::-1, ::-1], fshape)
+        if prep is not None:
+            _TPL_FFT[key] = Ft
+    Fi = prep.F if prep is not None else np.fft.rfft2(img, fshape)
+    num = np.fft.irfft2(Fi * Ft, fshape)[h - 1:H, w - 1:W]
+    if prep is not None:
+        ii, i2 = prep.ii, prep.i2
+    else:
+        ii = np.pad(img, ((1, 0), (1, 0))).cumsum(0).cumsum(1)
+        i2 = np.pad(img * img, ((1, 0), (1, 0))).cumsum(0).cumsum(1)
+    s = ii[h:, w:] - ii[:-h, w:] - ii[h:, :-w] + ii[:-h, :-w]
+    s2 = i2[h:, w:] - i2[:-h, w:] - i2[h:, :-w] + i2[:-h, :-w]
+    var = np.maximum(s2 - s * s / (h * w), 0.0)
+    den = np.sqrt(var) * tn
+    out = np.where(den > 1e-6, num / np.maximum(den, 1e-6), 0.0)
+    return out.astype(np.float32)
+
+
+def _fast_len(n: int) -> int:
+    """Smallest 2^a 3^b 5^c >= n (FFT-friendly size)."""
+    best = 1 << max(0, (n - 1).bit_length())
+    p5 = 1
+    while p5 < best:
+        p35 = p5
+        while p35 < best:
+            p = p35
+            while p < n:
+                p *= 2
+            best = min(best, p)
+            p35 *= 3
+        p5 *= 5
+    return best
+
+
+def viewport(rect):
+    """The 16:9 picture VALORANT draws inside its window. Super-ultrawide
+    (e.g. Samsung G9 5120x1440) and ultrawide get black bars left/right;
+    taller-than-16:9 windows get bars top/bottom."""
+    left, top, W, H = rect
+    if W * 9 > H * 16 + 9:            # wider than 16:9 -> pillarbox
+        vw = int(round(H * 16 / 9))
+        return (left + (W - vw) // 2, top, vw, H)
+    if W * 9 < H * 16 - 16:           # taller than 16:9 -> letterbox
+        vh = int(round(W * 9 / 16))
+        return (left, top + (H - vh) // 2, W, vh)
+    return rect
+
+
 class DeathDetector:
-    """Dead when any "SWITCH PLAYER" template matches near its spot."""
+    """Dead when a "SWITCH PLAYER" template matches near its spot.
+
+    Where to look = a transform (ox, oy, k): screen = window origin + (ox, oy)
+    + template_ref_xy * k. It comes from a saved calibration for this window
+    size if there is one, else from the 16:9 viewport geometry. Until a death
+    has been seen once, wide_search() also scans the whole bottom-left of the
+    window at a few scales; a consistent hit is saved as the calibration."""
 
     def __init__(self, cfg: dict, screen):
         from PIL import Image
         import numpy as np
+        self.cfg = cfg
         self.screen = screen
         self.threshold = float(cfg["death_threshold"])
+        self.wide_threshold = float(cfg.get("calibrate_threshold", 0.80))
         self.confirm = int(cfg["death_confirm_frames"])
         self.revive = int(cfg["revive_frames"])
         self.pad = int(cfg["search_pad"])
@@ -498,8 +591,11 @@ class DeathDetector:
             self.templates.append({"name": Path(t["file"]).stem, "x": int(t["x"]), "y": int(t["y"]),
                                    "ref": float(t.get("ref_height", 1080)),
                                    "g": bright(to_gray(img)), "w": img.shape[1], "h": img.shape[0]})
+        self.calibration = dict(cfg.get("calibration", {}))   # "WxH" -> {ox, oy, k}
         self.hits = 0
         self.misses = 0
+        self._wide_last = None        # (ox, oy, k) of the previous wide hit
+        self._wide_count = 0
         if not self.templates:
             log("WARN no death templates - death detection is OFF")
 
@@ -507,14 +603,42 @@ class DeathDetector:
     def enabled(self) -> bool:
         return bool(self.templates)
 
-    def _patch(self, t, rect):
-        """Template-scale brightness patch around the template spot."""
+    # -- where to look ------------------------------------------------------
+    @staticmethod
+    def key(rect) -> str:
+        return f"{rect[2]}x{rect[3]}"
+
+    def calibrated(self, rect) -> bool:
+        return self.key(rect) in self.calibration
+
+    def transform(self, rect, ref: float = 1080.0):
+        """(ox, oy, k) relative to the window's client origin."""
+        c = self.calibration.get(self.key(rect))
+        if c:
+            return float(c["ox"]), float(c["oy"]), float(c["k"])
+        vx, vy, vw, vh = viewport(rect)
+        return float(vx - rect[0]), float(vy - rect[1]), vh / ref
+
+    def save_calibration(self, rect, tr, why: str):
+        ox, oy, k = tr
+        key = self.key(rect)
+        self.calibration[key] = {"ox": round(float(ox), 1), "oy": round(float(oy), 1), "k": round(float(k), 4)}
+        try:
+            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8")) if CONFIG_PATH.exists() else {}
+            raw.setdefault("calibration", {})[key] = self.calibration[key]
+            CONFIG_PATH.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+        except OSError as e:
+            log(f"WARN could not save calibration: {e!r}")
+        log(f"CALIBRATED for {key}: offset {ox:.0f},{oy:.0f} scale {k:.3f} ({why}) - saved to config.json")
+
+    # -- fast check at the known spot ----------------------------------------
+    def _patch(self, t, rect, tr):
         from PIL import Image
         import numpy as np
-        left, top, _, height = rect
-        k = height / t["ref"]
+        ox, oy, k = tr
         pw, ph = t["w"] + 2 * self.pad, t["h"] + 2 * self.pad
-        box = (left + int(round((t["x"] - self.pad) * k)), top + int(round((t["y"] - self.pad) * k)),
+        box = (rect[0] + int(round(ox + (t["x"] - self.pad) * k)),
+               rect[1] + int(round(oy + (t["y"] - self.pad) * k)),
                max(1, int(round(pw * k))), max(1, int(round(ph * k))))
         g = to_gray(self.screen.grab(box))
         if g.shape != (ph, pw):
@@ -524,15 +648,67 @@ class DeathDetector:
     def score(self, rect) -> tuple[float, str]:
         best, name = -1.0, ""
         for t in self.templates:
-            g = self._patch(t, rect)
-            th, tw = t["h"], t["w"]
-            for dy in range(g.shape[0] - th + 1):
-                for dx in range(g.shape[1] - tw + 1):
-                    c = correlation(g[dy:dy + th, dx:dx + tw], t["g"])
-                    if c > best:
-                        best, name = c, t["name"]
+            tr = self.transform(rect, t["ref"])
+            m = ncc_map(self._patch(t, rect, tr), t["g"])
+            s = float(m.max())
+            if s > best:
+                best, name = s, t["name"]
         return best, name
 
+    # -- wide search (calibration) -------------------------------------------
+    def wide_search(self, rect):
+        """Scan the bottom-left of the whole window at a few scales.
+        Returns (score, (ox, oy, k), template name) of the best hit."""
+        from PIL import Image
+        import numpy as np
+        left, top, W, H = rect
+        # the prompt sits ~79 % down and ~6 % across the 16:9 picture; on a
+        # 32:9 window that picture starts 25 % in, so 40 % x 40 % covers all cases
+        gx, gy = 0, int(H * 0.58)
+        gw, gh = int(W * 0.40), int(H * 0.40)
+        raw = to_gray(self.screen.grab((left + gx, top + gy, gw, gh)))
+        base_k = viewport(rect)[3] / 1080.0
+        ks = sorted({round(base_k * f, 4) for f in (0.88, 1.0, 1.12)} | {round(H / 1080.0, 4)})
+        mh = max(t["h"] for t in self.templates)
+        mw = max(t["w"] for t in self.templates)
+        best = (-1.0, None, "")
+        for k in ks:
+            sw, sh = max(1, int(round(gw / k))), max(1, int(round(gh / k)))
+            img = raw if k == 1.0 else np.asarray(
+                Image.fromarray(raw, mode="F").resize((sw, sh), Image.BOX), dtype=np.float32)
+            img = bright(img)
+            fshape = (_fast_len(sh + mh - 1), _fast_len(sw + mw - 1))
+            prep = _Prepared(img, fshape)
+            for t in self.templates:
+                m = ncc_map(img, t["g"], prep)
+                iy, ix = np.unravel_index(int(m.argmax()), m.shape)
+                s = float(m[iy, ix])
+                if s > best[0]:
+                    # template top-left in window coords -> transform origin
+                    px, py = gx + ix * k, gy + iy * k
+                    best = (s, (px - t["x"] * k, py - t["y"] * k, k), t["name"])
+        return best
+
+    def wide_step(self, rect) -> bool:
+        """One calibration attempt. True once a hit is confirmed and saved."""
+        s, tr, name = self.wide_search(rect)
+        if s < self.wide_threshold or tr is None:
+            self._wide_count = 0
+            self._wide_last = None
+            return False
+        same = (self._wide_last is not None
+                and abs(tr[0] - self._wide_last[0]) <= 4 * tr[2]
+                and abs(tr[1] - self._wide_last[1]) <= 4 * tr[2]
+                and abs(tr[2] - self._wide_last[2]) < 0.05)
+        self._wide_count = self._wide_count + 1 if same else 1
+        self._wide_last = tr
+        if self._wide_count >= 2:
+            self.save_calibration(rect, tr, f"found '{name}' score {s:.2f} twice")
+            self._wide_count = 0
+            return True
+        return False
+
+    # -- state ------------------------------------------------------------------
     def reset(self):
         self.hits = 0
         self.misses = 0
@@ -546,6 +722,8 @@ class DeathDetector:
             self.hits += 1
             if not dead and self.hits >= self.confirm:
                 log(f"DEAD  marker '{name}' score {s:.2f}")
+                if not self.calibrated(rect):
+                    self.save_calibration(rect, self.transform(rect), "seen at the expected spot")
                 return True
         else:
             self.hits = 0
@@ -556,6 +734,62 @@ class DeathDetector:
                     self.misses = 0
                     return False
         return dead
+
+
+class Diagnostics:
+    """Until the death prompt has been found once for this window size, keep a
+    few small snapshots of the bottom-left of the game window (local only, in
+    diag/) so a failing setup can be diagnosed from one match. Also warns when
+    the screen capture comes back black."""
+
+    def __init__(self, cfg: dict):
+        self.every = float(cfg.get("diagnostics_interval", 8.0))
+        self.keep = int(cfg.get("diagnostics_keep", 40))
+        self.out = APP_DIR / "diag"
+        self.last = 0.0
+        self.announced = False
+        self.black = 0
+        self.black_warned = False
+
+    def tick(self, t: float, rect, screen):
+        from PIL import Image
+        import numpy as np
+        if t - self.last < self.every:
+            return
+        self.last = t
+        left, top, W, H = rect
+        box = (left, top + int(H * 0.45), int(W * 0.55), H - int(H * 0.45))
+        try:
+            arr = screen.grab(box)
+        except Exception as e:  # noqa: BLE001
+            log(f"WARN screen capture failed: {e!r}")
+            return
+        mean = float(np.asarray(arr, dtype=np.float32).mean())
+        if mean < 3.0:
+            self.black += 1
+            if self.black >= 3 and not self.black_warned:
+                self.black_warned = True
+                log("WARN the screenshot of the VALORANT window is BLACK. Windows isn't letting "
+                    "valspot see the game picture on this PC, so death detection can't work. "
+                    "Send valspot.log and the diag folder to whoever gave you this.")
+        else:
+            self.black = 0
+        try:
+            self.out.mkdir(exist_ok=True)
+            img = Image.fromarray(np.ascontiguousarray(arr))
+            if img.width > 1280:
+                img = img.resize((1280, max(1, img.height * 1280 // img.width)), Image.BILINEAR)
+            name = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}_{W}x{H}_mean{mean:.0f}.jpg"
+            img.save(self.out / name, quality=80)
+            files = sorted(self.out.glob("*.jpg"))
+            for old in files[:-self.keep]:
+                old.unlink()
+            if not self.announced:
+                self.announced = True
+                log(f"diagnostics: saving a snapshot of the bottom-left every {self.every:.0f}s "
+                    f"to {self.out} until the death prompt is found once (max {self.keep}, local only)")
+        except OSError as e:
+            log(f"WARN could not save diagnostic snapshot: {e!r}")
 
 
 # --------------------------------------------------------------------------
@@ -577,6 +811,9 @@ class Controller:
         self.window_name = lambda: ""
         self._had_window = True
         self._last_res = None
+        self._last_rect = None
+        self._wide_at = 0.0
+        self.diag = Diagnostics(cfg) if cfg.get("diagnostics", True) else None
 
     def handle(self, ev: Event, t: float):
         k = ev.kind
@@ -614,6 +851,9 @@ class Controller:
         elif k == "match_end":
             if self.in_match or self.phase != "menu":
                 log(f"MATCH end ({self.rounds_this_match} rounds)")
+                if self.det and self._last_rect and not self.det.calibrated(self._last_rect):
+                    log(f"NOTE death prompt not seen yet at {self.det.key(self._last_rect)}; "
+                        "still calibrating (needs one death where you spectate a teammate)")
                 self.sp.pause("match ended")
             self.in_match = False
             self.phase = "menu"
@@ -654,9 +894,23 @@ class Controller:
             log("VALORANT focused again, watching screen")
         if rect[2:] != self._last_res:
             self._last_res = rect[2:]
-            log(f"game window {rect[2]}x{rect[3]} at {rect[0]},{rect[1]}")
+            vp = viewport(rect)
+            ox, oy, k = self.det.transform(rect)
+            log(f"game window {rect[2]}x{rect[3]} at {rect[0]},{rect[1]}; 16:9 picture {vp[2]}x{vp[3]}; "
+                f"{'calibrated' if self.det.calibrated(rect) else 'not calibrated yet'} "
+                f"(offset {ox:.0f},{oy:.0f} scale {k:.3f})")
+        self._last_rect = rect
         was = self.dead
         self.dead = self.det.check(self.dead, rect)
+        # one-time calibration: until a death has been seen for this window
+        # size, also scan the whole bottom-left about once a second
+        if (not self.dead and not self.det.calibrated(rect)
+                and t - self._wide_at >= float(self.cfg.get("calibrate_interval", 2.0))):
+            self._wide_at = t
+            if self.det.wide_step(rect):
+                self.dead = True
+        if self.diag and not self.det.calibrated(rect):
+            self.diag.tick(t, rect, self.det.screen)
         if self.dead and not was:
             self.sp.play("you died")
         elif was and not self.dead:
@@ -682,6 +936,10 @@ def mode_run(cfg: dict, args):
         ctl.window_name = lambda: gw.last_exe
     else:
         ctl.window = gw.find_rect
+    import platform
+    log(f"valspot {VERSION} on Windows {platform.version()}; config {CONFIG_PATH}")
+    if not Path(cfg["log_path"]).exists():
+        log(f"NOTE VALORANT log not found yet at {cfg['log_path']} (fine if the game isn't running)")
     q: queue.Queue = queue.Queue()
     LogTailer(cfg["log_path"], q).start()
     st = sp.status()
@@ -702,20 +960,47 @@ def mode_run(cfg: dict, args):
 
 
 def mode_check(cfg: dict, args):
+    """Live diagnostics: where it looks, the marker score, and a wide search."""
     det = DeathDetector(cfg, Screen())
     gw = GameWindow()
     if not det.enabled:
         return
-    print("Printing the death-marker score once a second. Dead should read 0.8+.")
+    print("Once a second: marker score at the expected spot, plus a wide search.")
+    print("While you're dead and spectating, either should read 0.8+.")
+    print()
     while True:
         rect = gw.find_rect()
         if rect is None:
             print(f"{now_str()} VALORANT window not found", flush=True)
         else:
+            ox, oy, k = det.transform(rect)
+            import numpy as np
+            mean = float(np.asarray(det.screen.grab((rect[0], rect[1] + rect[3] // 2, rect[2] // 2, rect[3] // 2)),
+                                    dtype=np.float32).mean())
             s, name = det.score(rect)
-            print(f"{now_str()} {rect[2]}x{rect[3]} score={s:+.3f} ({name}) "
-                  f"{'DEAD' if s >= det.threshold else ''}", flush=True)
+            ws, wtr, wname = det.wide_search(rect)
+            where = f"{wtr[0]:.0f},{wtr[1]:.0f} x{wtr[2]:.2f}" if wtr else "-"
+            print(f"{now_str()} window {rect[2]}x{rect[3]} "
+                  f"{'calibrated' if det.calibrated(rect) else 'uncalibrated'} "
+                  f"brightness={mean:.0f}{' (BLACK - capture blocked?)' if mean < 3 else ''} "
+                  f"spot={s:+.2f} wide={ws:+.2f} ({where}) "
+                  f"{'DEAD' if max(s, ws) >= det.threshold else ''}", flush=True)
         time.sleep(1)
+
+
+def mode_shot(cfg: dict, args):
+    """Save a screenshot of the VALORANT window 5 s from now (to send for help)."""
+    from PIL import Image
+    gw = GameWindow()
+    print("Switch to VALORANT now (die and spectate a teammate). Capturing in 5 s...")
+    time.sleep(5)
+    rect = gw.find_rect()
+    if rect is None:
+        print("VALORANT window not found.")
+        return
+    out = APP_DIR / f"valspot-shot-{datetime.now().strftime('%H%M%S')}.png"
+    Image.fromarray(Screen().grab(rect)).save(out)
+    print(f"Saved {out.name} ({rect[2]}x{rect[3]}).")
 
 
 def mode_spotify(cfg: dict, args):
@@ -744,35 +1029,66 @@ def mode_template(cfg: dict, args):
 
 
 def mode_eval(cfg: dict, args):
-    """Run the real detector over video clips, optionally resized to another
-    resolution first (simulates a different monitor)."""
+    """Run the real detector + calibration over video clips.
+      --height H        content (16:9 picture) height, e.g. 1440
+      --canvas WxH      window size; content centered, black bars around it
+                        (Samsung G9: --height 1440 --canvas 5120x1440)
+      --naive           pretend the 16:9 geometry is unknown, so only the
+                        wide-search calibration can find the prompt"""
     import subprocess
     import numpy as np
+    global CONFIG_PATH, viewport
+    CONFIG_PATH = APP_DIR / "_eval_config.json"          # never touch the real config
+    if args.naive:
+        viewport = lambda rect: rect                      # noqa: E731
     th = float(cfg["death_threshold"])
-    det = DeathDetector(cfg, None)
-    H = int(args.height)
-    W = H * 16 // 9
+    ch = int(args.height)
+    cw = ch * 16 // 9
+    W, H = (int(v) for v in args.canvas.split("x")) if args.canvas else (cw, ch)
     rect = (0, 0, W, H)
-    for clip in args.clips:
-        cmd = [args.ffmpeg, "-hide_banner", "-loglevel", "error", "-threads", "1", "-i", clip,
-               "-vf", f"fps=2,scale={W}:{H}:flags=bicubic", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
-        scores, i = [], 0
-        while True:
-            buf = proc.stdout.read(W * H * 3)
-            if len(buf) < W * H * 3:
-                break
-            det.screen = ImageScreen(np.frombuffer(buf, np.uint8).reshape(H, W, 3))
-            scores.append((i / 2, det.score(rect)[0]))
-            i += 1
-        proc.wait()
-        dead = [t for t, s in scores if s >= th]
-        print(f"{Path(clip).name} @{W}x{H}: frames={len(scores)} dead={len(dead)} "
-              f"max={max(s for _, s in scores):+.3f} "
-              f"max-alive={max([s for _, s in scores if s < th] or [0]):+.3f} "
-              f"dead-span={f'{dead[0]}-{dead[-1]}s' if dead else '-'}")
-        if args.verbose:
-            print("  " + " ".join(f"{t:g}:{s:.2f}" for t, s in scores))
+    try:
+        for clip in args.clips:
+            cfg2 = dict(cfg)
+            cfg2["calibration"] = {}
+            det = DeathDetector(cfg2, None)
+            vf = f"fps=2,scale={cw}:{ch}:flags=bicubic,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2:black"
+            cmd = [args.ffmpeg, "-hide_banner", "-loglevel", "error", "-threads", "1", "-i", clip,
+                   "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+            rows, i, cal_at, wide_ms = [], 0, None, []
+            while True:
+                buf = proc.stdout.read(W * H * 3)
+                if len(buf) < W * H * 3:
+                    break
+                det.screen = ImageScreen(np.frombuffer(buf, np.uint8).reshape(H, W, 3))
+                s = det.score(rect)[0]
+                wide = None
+                if not det.calibrated(rect):
+                    t0 = time.perf_counter()
+                    ok = det.wide_step(rect)
+                    wide_ms.append((time.perf_counter() - t0) * 1000)
+                    wide = det._wide_last
+                    if ok:
+                        cal_at = i / 2
+                        s = det.score(rect)[0]
+                rows.append((i / 2, s, wide))
+                i += 1
+            proc.wait()
+            dead = [t for t, sc, _ in rows if sc >= th]
+            print(f"{Path(clip).name} window {W}x{H} picture {cw}x{ch}{' naive' if args.naive else ''}: "
+                  f"frames={len(rows)} dead={len(dead)} "
+                  f"dead-span={f'{dead[0]}-{dead[-1]}s' if dead else '-'} "
+                  f"max-not-dead={max([sc for _, sc, _ in rows if sc < th] or [0]):+.2f} "
+                  f"calibrated-at={cal_at if cal_at is not None else '-'}s "
+                  f"saved={det.calibration.get(det.key(rect))} "
+                  f"wide-search={np.mean(wide_ms):.0f}ms/frame" if wide_ms else "")
+            if args.verbose:
+                print("  " + " ".join(f"{t:g}:{sc:.2f}" for t, sc, _ in rows))
+    finally:
+        try:
+            CONFIG_PATH.unlink()
+        except OSError:
+            pass
 
 
 def mode_replay(cfg: dict, args):
@@ -794,7 +1110,7 @@ def mode_replay(cfg: dict, args):
 def main():
     ap = argparse.ArgumentParser(prog="valspot")
     ap.add_argument("mode", nargs="?", default="run",
-                    choices=["run", "check", "spotify", "replay", "eval", "template"])
+                    choices=["run", "check", "shot", "spotify", "replay", "eval", "template"])
     ap.add_argument("target", nargs="?", help="replay: log file / template: frame image")
     ap.add_argument("box", nargs="*", help="template: X Y W H")
     ap.add_argument("--name", default="marker")
@@ -802,10 +1118,12 @@ def main():
     ap.add_argument("--clips", nargs="*", default=[])
     ap.add_argument("--ffmpeg", default="ffmpeg")
     ap.add_argument("--height", default=1080)
+    ap.add_argument("--canvas", default="")
+    ap.add_argument("--naive", action="store_true")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
     cfg = load_config()
-    {"run": mode_run, "check": mode_check, "spotify": mode_spotify, "replay": mode_replay,
+    {"run": mode_run, "check": mode_check, "shot": mode_shot, "spotify": mode_spotify, "replay": mode_replay,
      "eval": mode_eval, "template": mode_template}[args.mode](cfg, args)
 
 

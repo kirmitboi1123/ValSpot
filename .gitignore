@@ -2,6 +2,7 @@
 .venv/
 build/
 dist/
+dist-*/
 *.spec
 __pycache__/
 exe-test/
@@ -14,3 +15,6 @@ valspot.log
 # release artifacts go on the GitHub release, not in git
 valspot-share.zip
 package/valspot.exe
+diag/
+valspot-shot-*.png
+_eval_config.json

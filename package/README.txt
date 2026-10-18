@@ -33,12 +33,23 @@ Is it safe with Vanguard?
   you're in. Tabbing out to Chrome/Discord pauses the screen check and keeps
   the music the way it was.
 
-Check that it sees your screen
-  Open a command prompt in this folder and run:   valspot.exe check
-  Then die in a match and spectate a teammate.
-  The score should jump to 0.8 or higher while "SWITCH PLAYER" is showing.
-  If it stays low, send the file valspot.log and a screenshot of your
-  screen while spectating to whoever gave you this.
+Ultrawide / Samsung G9
+  Works. VALORANT draws a 16:9 picture with black bars, and valspot looks
+  inside it. The first time you die and spectate, it also double-checks the
+  spot and saves it (the black window says "CALIBRATED").
+
+If music never plays when you die
+  1. Make sure VALORANT is in English and you're spectating a teammate
+     (the words "SWITCH PLAYER" show bottom-left).
+  2. Open a command prompt in this folder and run:   valspot.exe check
+     Die and spectate. "spot" or "wide" should read 0.8 or higher.
+  3. Still nothing: run   valspot.exe shot   , switch to VALORANT while
+     spectating, and send the saved valspot-shot-*.png plus valspot.log
+     to whoever gave you this.
+
+If music never plays at all (not even in the buy phase)
+  - Spotify must be the desktop app and open.
+  - Send valspot.log; the first lines say whether Spotify was found.
 
 Settings
   config.json (created on first run) next to the exe:
