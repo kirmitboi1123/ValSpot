@@ -1,4 +1,4 @@
-valspot - Spotify plays while you're dead or in the buy phase (VALORANT)
+ValSpot - Spotify plays while you're dead or in the buy phase (VALORANT)
 =========================================================================
 
 What it does
@@ -34,7 +34,7 @@ Is it safe with Vanguard?
   the music the way it was.
 
 Ultrawide / Samsung G9
-  Works. VALORANT draws a 16:9 picture with black bars, and valspot looks
+  Works. VALORANT draws a 16:9 picture with black bars, and ValSpot looks
   inside it. The first time you die and spectate, it also double-checks the
   spot and saves it (the black window says "CALIBRATED").
 

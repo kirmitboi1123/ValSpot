@@ -1,4 +1,4 @@
-# valspot test sheet (2026-10-17, v2)
+# ValSpot test sheet (2026-10-17, v2)
 
 Built and checked offline tonight. This sheet is the first **live** test. Takes one match.
 

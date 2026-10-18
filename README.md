@@ -1,4 +1,4 @@
-# valspot
+# ValSpot
 
 Plays Spotify while you are **dead** or in the **buy phase** of a VALORANT match.
 Pauses it everywhere else, including 3 seconds before the barriers drop.
@@ -23,9 +23,9 @@ still rename or delete it at launch. The screen check is two tiny boxes in the b
 
 **Any monitor, any resolution.** The window is found by its process name. VALORANT always draws a
 16:9 picture; on ultrawide or super-ultrawide windows (21:9, Samsung G9 32:9) it adds black bars, and
-valspot looks inside that 16:9 picture. Templates are stored at 1080p and scaled to its height.
+ValSpot looks inside that 16:9 picture. Templates are stored at 1080p and scaled to its height.
 
-**One-time auto-calibration.** Until it has seen you die once at a given window size, valspot also
+**One-time auto-calibration.** Until it has seen you die once at a given window size, ValSpot also
 searches the whole bottom-left of the window for the prompt every 2 seconds during live rounds.
 The first time it finds the prompt in the same place twice, it saves that position and scale to
 `config.json` under `calibration` (per window size, e.g. `"5120x1440"`) and uses it from then on.
@@ -103,4 +103,4 @@ Then check it against clips, optionally rescaled to simulate another monitor
 - Ultrawide and G9 handling is tested on simulated black-bar frames, not on a real ultrawide monitor. 4:3 stretched is untested.
 - Exclusive Fullscreen is untested; Windowed Fullscreen is what was used.
 - Overtime buy length is assumed to be 30 s. Swiftplay, Spike Rush, Deathmatch and customs are untested.
-- If you pause or play Spotify by hand, valspot does not fight you. It only acts at the next event.
+- If you pause or play Spotify by hand, ValSpot does not fight you. It only acts at the next event.
