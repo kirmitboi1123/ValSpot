@@ -117,12 +117,24 @@ public partial class SettingsWindow : Window
     {
         var keys = S.Calibration.Keys.ToList();
         int custom = S.CustomTemplates.Count;
-        if (keys.Count == 0 && custom == 0)
-            CalText.Text = "Not learned yet. It learns automatically the first time you die and spectate a teammate.";
+        ValSpot.Core.Rect? win = null;
+        try { win = _engine.Window.FindRect(); } catch { /* window lookup is best effort */ }
+        string text;
+        if (win is ValSpot.Core.Rect r && !_engine.Detector.Calibrated(r))
+            text = $"Ready. Your screen ({r.Key}) isn't one of the built-in sizes, so it finds the exact spot the first time you die and spectate.";
+        else if (win is ValSpot.Core.Rect r2 && S.Calibration.ContainsKey(r2.Key))
+            text = $"Ready. Set up for your screen ({r2.Key}) on this PC.";
+        else if (win is ValSpot.Core.Rect r3)
+            text = $"Ready. Your screen ({r3.Key}) is a built-in size, nothing to set up.";
         else
-            CalText.Text = $"Learned for {string.Join(", ", keys.DefaultIfEmpty("-"))}" + (custom > 0 ? $" · {custom} custom marker(s)" : "") + ".";
+            text = "Ready. Common screen sizes (16:9, ultrawide, Samsung G9, 16:10) are built in. Any other size is set up the first time you die and spectate.";
+        if (keys.Count > 0 && win == null) text += $" Also set up on this PC: {string.Join(", ", keys)}.";
+        if (custom > 0) text += $" Using {custom} marker(s) you drew.";
+        CalText.Text = text;
         ResetCalButton.IsEnabled = keys.Count > 0 || custom > 0;
     }
+
+    private Status? _lastStatus;
 
     private void OnStatus()
     {
@@ -131,6 +143,7 @@ public partial class SettingsWindow : Window
             StatusText.Text = _engine.StatusText();
             StatusDot.Fill = new SolidColorBrush(TrayApp.StatusColor(_engine.Status));
             PauseAll.IsChecked = S.Paused;
+            if (_lastStatus != _engine.Status) { _lastStatus = _engine.Status; RefreshCal(); }
         }));
     }
 

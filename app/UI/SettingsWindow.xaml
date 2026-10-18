@@ -76,7 +76,7 @@
       <TextBlock Text="DEATH DETECTION" Style="{StaticResource Heading}"/>
       <Border Style="{StaticResource CardBox}">
         <StackPanel>
-          <TextBlock x:Name="CalText" Text="Learns your screen automatically the first time you die and spectate."/>
+          <TextBlock x:Name="CalText" Text="Ready."/>
           <TextBlock Style="{StaticResource Hint}" Margin="0,6,0,10"
                      Text="It watches for the &quot;SWITCH PLAYER&quot; line under your teammate's name. Other game language, or it never notices you died? Teach it once:"/>
           <WrapPanel>
