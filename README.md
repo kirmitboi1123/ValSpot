@@ -1,116 +1,133 @@
 # ValSpot
 
-Plays Spotify while you are **dead** or in the **buy phase** of a VALORANT match.
-Pauses it everywhere else, including 3 seconds before the barriers drop.
+Your music plays while you're **dead**, in the **buy phase**, or **back in the lobby** in VALORANT,
+and fades out 3 seconds before the barriers drop. A small Windows tray app; nothing to set up.
 
-> **ValSpot 3 (preview)** is a rewrite as a Windows tray app: settings window, fade in/out,
-> any music app (not just Spotify), start with Windows, update check, and "Learn my death screen"
-> for non-English game clients. It also handles Swiftplay, plays music back in the lobby, joins a
-> match already in progress, and knows common screen sizes out of the box. Source in [`app/`](app/),
-> download from the [3.0.2 pre-release](https://github.com/kirmitboi1123/ValSpot/releases/tag/v3.0.2).
-> Buy-phase timing is confirmed in live matches; the stable version below is 2.1.2.
+**Download:** `ValSpot-share.zip` from the [latest 3.x release](https://github.com/kirmitboi1123/ValSpot/releases/tag/v3.0.2).
+Unzip it, run `ValSpot.exe`, play. Windows 10 or 11, 64-bit.
 
-Start it by double-clicking **`Start valspot.bat`** (or `valspot.exe` from the package), then play.
-Close the window to stop.
+## What it does
 
-## How it knows what is happening
-
-| What | Where it comes from |
+| Moment | Music |
 |---|---|
-| Buy phase start | VALORANT's own log, `ShooterGame.log` (`Gameplay started at local time 0.x`) |
-| Round 1 buy phase | Match load-in line in the same log (round 1 has no buy line; its 45 s buy starts at load-in) |
-| Barriers drop | Same log (`Gameplay started at local time 30.x` / `45.x`) |
-| Match over | Same log (`Transitioning ... to MainMenu`) |
-| You died | The **"< mouse > SWITCH PLAYER"** prompt under the spectated teammate's name, bottom-left of the game window |
-| Spotify | Windows media controls (same thing as the volume-flyout buttons). No Premium or login. |
+| Buy phase starts | fades in |
+| A few seconds before the barriers drop (you pick how many) | fades out |
+| You die and spectate a teammate | fades in, until the next round goes live |
+| Round live and you're alive | off |
+| Match over, back in the lobby | fades in (can be turned off) |
+| Shooting Range | left alone |
 
-Nothing reads or touches the game process. The log is opened with full sharing, so VALORANT can
-still rename or delete it at launch. The screen check is two tiny boxes in the bottom-left of the
-**VALORANT window**, 8 times a second, only during a live round and only while VALORANT is focused.
+Works with Spotify, or whatever is playing: YouTube Music, Apple Music, Tidal, a browser tab.
+No Spotify Premium or login needed.
 
-**Any monitor, any resolution.** The window is found by its process name. VALORANT always draws a
-16:9 picture; on ultrawide or super-ultrawide windows (21:9, Samsung G9 32:9) it adds black bars, and
-ValSpot looks inside that 16:9 picture. Templates are stored at 1080p and scaled to its height.
+## Using it
 
-**One-time auto-calibration.** Until it has seen you die once at a given window size, ValSpot also
-searches the whole bottom-left of the window for the prompt every 2 seconds during live rounds.
-The first time it finds the prompt in the same place twice, it saves that position and scale to
-`config.json` under `calibration` (per window size, e.g. `"5120x1440"`) and uses it from then on.
-Delete that entry to make it calibrate again.
+1. Put `ValSpot.exe` somewhere it can stay, like Documents.
+2. Run it. The settings window opens once; after that ValSpot lives in the tray next to the clock.
+3. Open your music and play. Turn on **Start with Windows** and it waits in the tray until VALORANT opens.
 
-## Rules it follows
+The tray icon's dot shows what it's doing:
 
-- **Buy phase starts**: play.
-- **Buy phase has 3 s left** (30 s buy, or 45 s on round 1 and round 13): pause.
-- **Barriers drop**: pause (safety net).
-- **You die** (marker seen 3 frames in a row): play.
-- **You get revived** (marker gone 4 s): pause.
-- **Match ends / you leave**: pause.
-- **Tabbed out** (Chrome, Discord...): the screen is ignored and the dead/alive state is held.
-  Buy-phase timing comes from the log, so tabbing never affects it.
-- Only **bomb-mode** matches start music on load-in. The Range does not.
-
-Every decision is logged in `valspot.log` with the reason.
-
-## Settings (`config.json`, written on first run)
-
-| Key | Default | Meaning |
-|---|---|---|
-| `pause_lead_seconds` | 3 | How long before the barriers drop to pause |
-| `death_threshold` | 0.60 | Marker score needed to count as dead (alive frames score at most 0.20; dead 0.79+ at 1080p, 1440p and 4K) |
-| `death_confirm_frames` | 3 | Frames in a row the marker must show (at 8 per second) |
-| `revive_frames` | 32 | Frames without the marker before "revived" (4 s) |
-| `only_when_focused` | true | Only read the screen while VALORANT is the focused window |
-| `calibrate_threshold` | 0.80 | Score the wide search needs (twice, same spot) to save a calibration |
-| `calibration` | none | Saved prompt position per window size; written automatically |
-| `dry_run` | false | true = log what it would do, never touch Spotify |
-
-Delete `config.json` to get the defaults back. `config.v1.json` is the old v1 file, kept for reference.
-
-## Sharing it: the exe
-
-To rebuild from source: `python -m venv .venv`, then `.venv\Scripts\pip install -r requirements.txt`, then `build.bat`.
-
-`build.bat` makes `dist\valspot.exe`, one file with Python, the libraries and the templates inside.
-The friend package is `valspot-share.zip` (the exe plus `package\README.txt`), attached to the GitHub release.
-The exe is unsigned, so Windows SmartScreen asks "More info / Run anyway" on first launch.
-
-## Templates
-
-`templates/` holds the two "SWITCH PLAYER" shapes: a larger one right after you die or switch
-players, and a smaller one it settles into after a few seconds. Both were cut from Medal clips.
-
-If a patch restyles the prompt, re-cut it from a screenshot or clip frame where you are dead
-(coordinates are in that image's pixels; its height is stored, so any resolution works):
-
-```bash
-.venv/Scripts/python valspot.py template FRAME.png X Y W H --name switch_player
-```
-
-Then check it against clips, optionally rescaled to simulate another monitor
-(`--canvas 5120x1440` adds G9-style black bars; `--naive` tests the calibration search alone):
-
-```bash
-.venv/Scripts/python valspot.py eval --ffmpeg "%LOCALAPPDATA%/Medal/recorder-2642.2986.1/ffmpeg7.exe" --clips "D:/Medal/Clips/Valorant/SOMECLIP.mp4" --height 1440
-```
-
-## Other modes
-
-| Command | What it does |
+| Dot | Meaning |
 |---|---|
-| `valspot.py check` | Prints, once a second, the window size, whether it's calibrated, and the marker score at the expected spot and from a wide search (dead should read 0.8+) |
-| `valspot.py shot` | Saves a screenshot of the VALORANT window 5 s later, to send when asking for help |
-| `valspot.py spotify` | Plays Spotify for 2 s, then pauses (control test) |
-| `valspot.py replay LOG` | Feeds an old `ShooterGame.log` through the rules, dry-run |
-| `valspot.py run --dry-run` | Real run, but only logs Spotify actions |
+| grey | waiting for VALORANT, or in the menus |
+| blue | in a match, music off |
+| green | music on |
+| amber | you paused ValSpot |
+| red | something needs a look (hover for details) |
+
+Left-click the icon for settings, right-click for the menu.
+
+**First launch:** the exe isn't code-signed, so Windows says "Windows protected your PC".
+Click **More info**, then **Run anyway**.
+
+## Settings
+
+Everything is in the settings window: what plays when, how early to stop before the round,
+fade length, which music app, start with Windows, update check, and pause.
+
+Settings are saved in `%APPDATA%\ValSpot\settings.json`, with the log (`valspot.log`) and anything
+it learned. Put an empty `settings.json` next to `ValSpot.exe` to keep everything in that folder
+instead (portable mode).
+
+## How it knows what's happening
+
+**Round timing comes from VALORANT's own log** (`ShooterGame.log`), which the game writes anyway:
+
+| What | Log line |
+|---|---|
+| Buy phase starts | `Gameplay started at local time 0.x` |
+| Barriers drop | `Gameplay started at local time 30.x` or `45.x` |
+| Round over | `OnRoundEnded for round 'N'` |
+| Match start and end | the game moving to `InGame` or `MainMenu` |
+| Game mode | the mode path just before the match starts |
+
+Buy phases are 30 seconds, except 45 at load-in and after the side swap: after round 12 in
+standard matches, after round 4 in Swiftplay. Other modes learn it: if a buy phase runs 45 seconds
+when ValSpot expected 30, it remembers that round for that mode.
+
+Started ValSpot in the middle of a match? It reads the match so far from the log and joins in.
+
+**Your death comes from the screen**, because the log doesn't say when you die. While you spectate,
+VALORANT shows **"< mouse > SWITCH PLAYER"** under your teammate's name. During live rounds,
+ValSpot takes a tiny screenshot of that spot 8 times a second and compares it with two built-in
+pictures of that line. It counts you as dead after 3 matching checks in a row, and alive again after
+4 seconds without it.
+
+| | Typical score |
+|---|---|
+| Dead | 0.8 to 1.0 |
+| Alive | 0.2 or lower |
+| Needed to count as dead | 0.60 |
+
+The spot is worked out from the window size. VALORANT always draws a 16:9 picture and adds black
+bars on wider screens, so every 16:9 size, the common ultrawides (21:9, 32:9 like the Samsung G9)
+and 16:10 work from the first death. On any other size, ValSpot finds the line during your first
+death and saves the position for good.
+
+**Game not in English?** The line says different words. Right-click the tray icon, choose
+**Learn my death screen**, die and spectate, click Capture, and drag a box around that line once.
+
+## Is it safe with Vanguard?
+
+It never touches the game: no memory reading, no injection, no input. It reads the log file
+VALORANT already writes, and screenshots a small corner of the game window during live rounds,
+only while VALORANT is the window you're in. Tabbing out keeps the music the way it was.
 
 ## Known limits
 
-- English game client only: the marker is the text "SWITCH PLAYER".
-- Ultrawide and G9 handling is tested on simulated black-bar frames, not on a real ultrawide monitor. 4:3 stretched is untested.
-- Exclusive Fullscreen is untested; Windowed Fullscreen is what was used.
-- Overtime buy length is assumed to be 30 s. Swiftplay, Spike Rush, Deathmatch and customs are untested.
-- If you pause or play Spotify by hand, ValSpot does not fight you. It only acts at the next event.
+- Tested on standard matches, Swiftplay and the Range. Overtime buy phases are assumed to be
+  30 seconds. Deathmatch, Team Deathmatch, Spike Rush and Escalation are untested.
+- Non-English clients need "Learn my death screen" once.
+- Exclusive Fullscreen and 4:3 stretched are untested; Windowed Fullscreen is what was used.
+- Fading in and out was tested on Spotify; other apps should work the same way.
+- If you play or pause your music by hand, ValSpot doesn't fight you. It acts at the next event.
+- The exe is 172 MB (67 MB zipped), because it carries its own .NET runtime.
+
+## Something wrong?
+
+Right-click the tray icon, choose **Open log folder**, and send `valspot.log`, plus the `diag`
+folder if death music never worked. Every decision in the log comes with its reason.
+
+## Building it
+
+Source is in [`app/`](app/): C# and WPF on .NET 10, with NAudio for the volume fades.
+With the .NET 10 SDK installed, run `app\build.ps1`. It makes `app\publish\ValSpot.exe`
+(one self-contained file) and `app\ValSpot-share.zip`.
+
+The exe has a test mode for checking changes without playing:
+
+| Command | What it does |
+|---|---|
+| `--replay LOG` | Runs an old `ShooterGame.log` through the rules and prints every decision |
+| `--eval --ffmpeg FFMPEG --height H CLIP` | Scores death detection on a recorded clip (`--canvas 5120x1440` adds G9 black bars) |
+| `--check` | Prints the death score on the live screen once a second |
+| `--media` | Shows which music app it would control |
+| `--version` | Prints the version |
+
+Add `--out FILE` to save the output; the exe is a windowed app, so it doesn't print to a console.
+
+The older Python version (2.x) is documented in [docs/python-v2.md](docs/python-v2.md).
 
 ## License
 
