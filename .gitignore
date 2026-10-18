@@ -18,3 +18,6 @@ package/valspot.exe
 diag/
 valspot-shot-*.png
 _eval_config.json
+ValSpot/
+ValSpot.lnk
+dist-icon/
