@@ -53,8 +53,10 @@ Delete `config.json` to get the defaults back. `config.v1.json` is the old v1 fi
 
 ## Sharing it: the exe
 
+To rebuild from source: `python -m venv .venv`, then `.venv\Scripts\pip install -r requirements.txt`, then `build.bat`.
+
 `build.bat` makes `dist\valspot.exe`, one file with Python, the libraries and the templates inside.
-The friend package is `valspot-share.zip`: the exe plus `package\README.txt`.
+The friend package is `valspot-share.zip` (the exe plus `package\README.txt`), attached to the GitHub release.
 The exe is unsigned, so Windows SmartScreen asks "More info / Run anyway" on first launch.
 
 ## Templates
