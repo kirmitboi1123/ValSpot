@@ -1,0 +1,16 @@
+# local environment and build output
+.venv/
+build/
+dist/
+*.spec
+__pycache__/
+exe-test/
+
+# per-machine files (created on first run)
+config.json
+config.v1.json
+valspot.log
+
+# release artifacts go on the GitHub release, not in git
+valspot-share.zip
+package/valspot.exe
