@@ -111,3 +111,10 @@ Then check it against clips, optionally rescaled to simulate another monitor
 - Exclusive Fullscreen is untested; Windowed Fullscreen is what was used.
 - Overtime buy length is assumed to be 30 s. Swiftplay, Spike Rush, Deathmatch and customs are untested.
 - If you pause or play Spotify by hand, ValSpot does not fight you. It only acts at the next event.
+
+## License
+
+ValSpot is free for personal and other noncommercial use under the
+[PolyForm Noncommercial License 1.0.0](LICENSE.md). You can use it, change it and share it,
+as long as it's not for money and the license comes along. Selling it, or using it in a paid
+product or service, is not allowed.

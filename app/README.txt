@@ -54,3 +54,8 @@ Where your settings live
 
 Something wrong? Right-click the tray icon > Open log folder, and send
 valspot.log (plus the "diag" folder if death music never worked).
+
+License
+  Free for personal, noncommercial use. Don't sell it or use it in anything
+  paid. Full terms: PolyForm Noncommercial 1.0.0,
+  https://github.com/kirmitboi1123/ValSpot/blob/main/LICENSE.md
