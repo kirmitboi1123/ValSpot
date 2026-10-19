@@ -31,7 +31,9 @@ public static class GameLogParser
         if (m.Success)
         {
             double t = double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
-            if (t < 5.0) return new GameEvent(GameEventKind.Buy, "", t, StampOf(line));
+            // buy start reads ~0, but the game's clock can start a few seconds late after a hitch
+            // (seen: 5.4 at a round end, with the barriers at 35.7, a normal 30 s buy phase)
+            if (t < 15.0) return new GameEvent(GameEventKind.Buy, "", t, StampOf(line));
             if (t >= 20.0) return new GameEvent(GameEventKind.Combat, "", t, StampOf(line));
             return null;
         }

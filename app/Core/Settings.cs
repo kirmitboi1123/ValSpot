@@ -42,10 +42,10 @@ public sealed class Settings
     public bool OnlyWhenFocused { get; set; } = true;
     public int BuySeconds { get; set; } = 30;
     public int FirstBuySeconds { get; set; } = 45;
-    /// <summary>Round index after which the long side-swap buy phase comes, per mode. Standard
-    /// matches swap after round 12 (index 11), Swiftplay after round 4 (index 3); other modes
-    /// are learned the first time a long mid-match buy phase shows up.</summary>
-    public Dictionary<string, int> HalfTimeByMode { get; set; } = new() { ["Bomb"] = 11, ["Swiftplay"] = 3 };
+    /// <summary>Long (45 s) mid-match buy phases learned on this PC, per mode, as the index of the
+    /// round just ended. Only modes ValSpot doesn't know yet end up here; the known ones are
+    /// built into Rules (standard matches and Swiftplay).</summary>
+    public Dictionary<string, List<int>> LearnedLongBuys { get; set; } = new();
     public int PollHz { get; set; } = 8;
     public double DeathThreshold { get; set; } = 0.60;
     public double CalibrateThreshold { get; set; } = 0.80;

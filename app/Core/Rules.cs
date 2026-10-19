@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 
 namespace ValSpot.Core;
@@ -23,6 +24,7 @@ public sealed class Rules
     public DateTime? PauseAt { get; private set; }
     public bool MusicWanted { get; private set; }
     private double _expectedBuy;
+    private double _buyClock;   // game clock at the buy-phase start line (0 at load-in)
 
     /// <summary>When true (catching up on an already-running match), nothing is logged and no
     /// music commands are sent; only the state is rebuilt.</summary>
@@ -59,8 +61,19 @@ public sealed class Rules
     /// <summary>Modes where the match opens with a 45 s buy phase at load-in.</summary>
     public static bool BuyAtLoadIn(string mode) => mode is "Bomb" or "Swiftplay";
 
-    /// <summary>Round index after which the long side-swap buy phase comes, if known.</summary>
-    public int? HalfTimeAfter(string mode) => _s.HalfTimeByMode.TryGetValue(mode, out int r) ? r : null;
+    /// <summary>Long 45 s buy phases mid-match, as the index of the round just ended. Standard
+    /// matches: the side swap after round 12, and the first overtime round after round 24
+    /// (every later overtime round is 30 s). Swiftplay: the side swap after round 4. Measured
+    /// on the user's logs, 2026-10-18.</summary>
+    private static readonly Dictionary<string, int[]> BuiltInLongBuys = new()
+    {
+        ["Bomb"] = new[] { 11, 23 },
+        ["Swiftplay"] = new[] { 3 },
+    };
+
+    public bool LongBuyAfter(string mode, int round) =>
+        (BuiltInLongBuys.TryGetValue(mode, out var b) && Array.IndexOf(b, round) >= 0)
+        || (_s.LearnedLongBuys.TryGetValue(mode, out var l) && l.Contains(round));
 
     public void Handle(GameEvent ev, DateTime now)
     {
@@ -76,6 +89,7 @@ public sealed class Rules
                 Dead = false;
                 Phase = Phase.Pregame;
                 Say($"MATCH start (mode={(Mode.Length > 0 ? Mode : "?")})");
+                _buyClock = 0;
                 if (BuyAtLoadIn(Mode)) EnterBuy(now);   // measured 44.8-45.3 s load-in to barriers
                 break;
             case GameEventKind.Pregame:
@@ -83,7 +97,11 @@ public sealed class Rules
                 break;
             case GameEventKind.Buy:
                 // the Shooting Range logs a "buy phase" line at load-in; it has no rounds
-                if (Mode != "Range") EnterBuy(now);
+                if (Mode != "Range")
+                {
+                    _buyClock = ev.Number;
+                    EnterBuy(now);
+                }
                 break;
             case GameEventKind.Combat when Mode == "Range":
                 break;
@@ -121,16 +139,22 @@ public sealed class Rules
     /// <summary>The barrier-drop line says how long the buy phase really was ("local time 45.x").
     /// If a mid-match buy ran long when we expected a normal one, that round is this mode's
     /// side swap: remember it (saved), so the next match gets it right.</summary>
-    private void LearnBuyLength(double actual)
+    private void LearnBuyLength(double barrierClock)
     {
-        if (LastRound is not int n || actual <= 0 || Phase != Phase.Buy) return;
+        if (LastRound is not int n || barrierClock <= 0 || Phase != Phase.Buy) return;
+        double actual = barrierClock - _buyClock;   // both on the game's clock, so a late start cancels out
         bool wasLong = actual >= (_s.BuySeconds + _s.FirstBuySeconds) / 2.0;
         bool expectedLong = _expectedBuy >= (_s.BuySeconds + _s.FirstBuySeconds) / 2.0;
         if (wasLong && !expectedLong && Mode.Length > 0)
         {
-            _s.HalfTimeByMode[Mode] = n;
-            _s.Save();
-            Say($"learned: in {Mode} the sides swap after round {n + 1} (long buy phase); next time it stops on time");
+            if (!_s.LearnedLongBuys.TryGetValue(Mode, out var list)) _s.LearnedLongBuys[Mode] = list = new();
+            if (!list.Contains(n))
+            {
+                list.Add(n);
+                list.Sort();
+                _s.Save();
+            }
+            Say($"learned: in {Mode}, round {n + 2} has a long buy phase ({actual:0} s); next time it stops on time");
         }
     }
 
@@ -138,7 +162,7 @@ public sealed class Rules
     {
         Phase = Phase.Buy;
         Dead = false;
-        bool first = LastRound == null || LastRound == HalfTimeAfter(Mode);
+        bool first = LastRound is not int r || LongBuyAfter(Mode, r);
         double length = first ? _s.FirstBuySeconds : _s.BuySeconds;
         _expectedBuy = length;
         double lead = Math.Clamp(_s.PauseLeadSeconds, 0, length);

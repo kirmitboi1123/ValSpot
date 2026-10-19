@@ -63,8 +63,9 @@ instead (portable mode).
 | Game mode | the mode path just before the match starts |
 
 Buy phases are 30 seconds, except 45 at load-in and after the side swap: after round 12 in
-standard matches, after round 4 in Swiftplay. Other modes learn it: if a buy phase runs 45 seconds
-when ValSpot expected 30, it remembers that round for that mode.
+standard matches, after round 4 in Swiftplay. In overtime, the first round (round 25) gets 45
+seconds and every later one 30. Other modes learn it: if a buy phase runs 45 seconds when ValSpot
+expected 30, it remembers that round for that mode.
 
 Started ValSpot in the middle of a match? It reads the match so far from the log and joins in.
 
@@ -96,8 +97,8 @@ only while VALORANT is the window you're in. Tabbing out keeps the music the way
 
 ## Known limits
 
-- Tested on standard matches, Swiftplay and the Range. Overtime buy phases are assumed to be
-  30 seconds. Deathmatch, Team Deathmatch, Spike Rush and Escalation are untested.
+- Tested on standard matches (overtime included), Swiftplay and the Range. Deathmatch,
+  Team Deathmatch, Spike Rush and Escalation are untested.
 - Non-English clients need "Learn my death screen" once.
 - Exclusive Fullscreen and 4:3 stretched are untested; Windowed Fullscreen is what was used.
 - Fading in and out was tested on Spotify; other apps should work the same way.

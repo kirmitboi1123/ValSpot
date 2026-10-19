@@ -46,6 +46,12 @@ Close any older ValSpot first (the Python one in the tray/console, `dist*`, or `
 - **Shooting Range:** opening it no longer plays music for 27 s.
 - **Learn my death screen:** says your screen is already set up (preset size). Only needed for non-English clients.
 
+## 3.0.3 additions
+
+- **Overtime:** round 25 (the first overtime round) is a 45 s buy phase; music should stop a few seconds before it ends, not 20 s early. Later overtime rounds are 30 s.
+- **Round 13 after an overtime match:** still 45 s. (3.0.2 could mislearn round 24 as the side swap and then cut round 13 short.)
+- **No more "learned:" lines** in valspot.log for standard matches or Swiftplay.
+
 ## 4. Check your volume afterwards
 
 - Open the Windows volume mixer: Spotify should be back at the level it was before (fades always restore it).
