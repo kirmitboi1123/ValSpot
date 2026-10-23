@@ -42,6 +42,10 @@ public static class Updater
             if (dash >= 0) s = s[..dash];
             return Version.TryParse(s.Contains('.') ? s : s + ".0", out var v) ? v : new Version(0, 0);
         }
-        return Parse(tag) > Parse(current);
+        Version t = Parse(tag), c = Parse(current);
+        if (t != c) return t > c;
+        // same number: a release is newer than its beta (3.0.4 > 3.0.4-beta.1)
+        static bool Pre(string s) => s.Split('+')[0].Contains('-');
+        return Pre(current) && !Pre(tag);
     }
 }

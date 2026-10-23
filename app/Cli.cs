@@ -36,6 +36,7 @@ public static class Cli
                 "--fade-test" => FadeTest(),
                 "--render" => Render(a),
                 "--learn-test" => LearnTest(a),
+                "--updater-test" => UpdaterTest(),
                 "--bench" => Bench(),
                 "--catchup-test" => CatchUpTest(),
                 "--version" => Print(Program.Version),
@@ -363,16 +364,16 @@ public static class Cli
         string dir = a[1];
         Directory.CreateDirectory(dir);
 
-        // focus: away for 1.0 s, in front, a 0.1 s blip away at 1.3 s, then in front for good
+        // focus: away for 1.0 s, in front, away again 1.3-1.6 s (longer than one poll), then in front for good
         var fake = new Rect(0, 0, 5120, 1440);
         var clock = System.Diagnostics.Stopwatch.StartNew();
         Rect? Focus()
         {
             double t = clock.Elapsed.TotalSeconds;
-            return t < 1.0 || (t >= 1.3 && t < 1.4) ? null : fake;
+            return t < 1.0 || (t >= 1.3 && t < 1.6) ? null : fake;
         }
         var got = Task.Run(() => UI.LearnWindow.WaitForGame(Focus, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(600))).GetAwaiter().GetResult();
-        Console.WriteLine($"wait: returned {(got is null ? "null" : got.Value.Key)} after {clock.Elapsed.TotalSeconds:0.00} s (expect 5120x1440 after ~2.0 s)");
+        Console.WriteLine($"wait: returned {(got is null ? "null" : got.Value.Key)} after {clock.Elapsed.TotalSeconds:0.00} s (expect 5120x1440 after ~2.2 s: the 0.6 s settle restarts at 1.6 s)");
         clock.Restart();
         var none = Task.Run(() => UI.LearnWindow.WaitForGame(() => null, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(600))).GetAwaiter().GetResult();
         Console.WriteLine($"wait: game never in front -> {(none is null ? "null" : "a rect")} after {clock.Elapsed.TotalSeconds:0.00} s (expect null after ~1.0 s)");
@@ -398,6 +399,20 @@ public static class Cli
             w.Close();
         }
         engine.Dispose();
+        return 0;
+    }
+
+    private static int UpdaterTest()
+    {
+        foreach (var (tag, cur, want) in new[]
+        {
+            ("v3.0.4", "3.0.4-beta.1", true), ("v3.0.4-beta.1", "3.0.3", true), ("v3.0.3", "3.0.4-beta.1", false),
+            ("v3.0.4-beta.1", "3.0.4-beta.1", false), ("v3.0.4", "3.0.4", false), ("v3.1.0", "3.0.4-beta.1", true),
+        })
+        {
+            bool got = Updater.IsNewer(tag, cur);
+            Console.WriteLine($"{(got == want ? "ok  " : "FAIL")} {tag} newer than {cur}: {got}");
+        }
         return 0;
     }
 
