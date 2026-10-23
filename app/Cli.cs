@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using ValSpot.Core;
 
 namespace ValSpot;
@@ -34,6 +35,7 @@ public static class Cli
                 "--media" => MediaInfoCmd(),
                 "--fade-test" => FadeTest(),
                 "--render" => Render(a),
+                "--learn-test" => LearnTest(a),
                 "--bench" => Bench(),
                 "--catchup-test" => CatchUpTest(),
                 "--version" => Print(Program.Version),
@@ -349,6 +351,53 @@ public static class Cli
         Snap(new UI.LearnWindow(engine), Path.Combine(dir, "learn.png"));
         engine.Dispose();
         Console.WriteLine($"rendered to {dir}");
+        return 0;
+    }
+
+    // -------------------------------------------------------------- learn-test (Learn window on saved frames)
+    /// <summary>--learn-test OUTDIR FRAME.png...: runs the Learn window's analysis and display on
+    /// each frame (as if it were the whole game window) and renders the window to OUTDIR. Also
+    /// times the wait-for-the-game logic against a fake focus sequence.</summary>
+    private static int LearnTest(string[] a)
+    {
+        string dir = a[1];
+        Directory.CreateDirectory(dir);
+
+        // focus: away for 1.0 s, in front, a 0.1 s blip away at 1.3 s, then in front for good
+        var fake = new Rect(0, 0, 5120, 1440);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        Rect? Focus()
+        {
+            double t = clock.Elapsed.TotalSeconds;
+            return t < 1.0 || (t >= 1.3 && t < 1.4) ? null : fake;
+        }
+        var got = Task.Run(() => UI.LearnWindow.WaitForGame(Focus, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(600))).GetAwaiter().GetResult();
+        Console.WriteLine($"wait: returned {(got is null ? "null" : got.Value.Key)} after {clock.Elapsed.TotalSeconds:0.00} s (expect 5120x1440 after ~2.0 s)");
+        clock.Restart();
+        var none = Task.Run(() => UI.LearnWindow.WaitForGame(() => null, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(600))).GetAwaiter().GetResult();
+        Console.WriteLine($"wait: game never in front -> {(none is null ? "null" : "a rect")} after {clock.Elapsed.TotalSeconds:0.00} s (expect null after ~1.0 s)");
+
+        var s = TempSettings();
+        var tray = new UI.TrayApp(s, true);
+        var engine = new Engine(s, null, dryRun: true);
+        foreach (var file in a.Skip(2).TakeWhile(x => !x.StartsWith("--")))
+        {
+            using var loaded = new System.Drawing.Bitmap(file);
+            var bmp = loaded.Clone(new System.Drawing.Rectangle(0, 0, loaded.Width, loaded.Height), System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            var r0 = new Rect(0, 0, bmp.Width, bmp.Height);
+            var res = UI.LearnWindow.Analyze(s, new[] { bmp }, r0);
+            var w = new UI.LearnWindow(engine);
+            w.Apply(res, r0);
+            string name = Path.GetFileNameWithoutExtension(file);
+            Snap(w, Path.Combine(dir, $"learn-{name}.png"));
+            var pic = UI.LearnWindow.PictureArea(r0);
+            Console.WriteLine($"{name}: {r0.Key} black={res.Black} (picture brightness {res.PictureMean:0.0}) score={res.Hit.Score:0.00} " +
+                              $"shown={res.Area.X},{res.Area.Y} {res.Area.W}x{res.Area.H} ({(res.Area == pic ? "16:9 picture crop" : "wide crop")})");
+            Console.WriteLine($"   step: {w.Step.Text}");
+            Console.WriteLine($"   result: {w.Result.Text}");
+            w.Close();
+        }
+        engine.Dispose();
         return 0;
     }
 

@@ -52,6 +52,14 @@ Close any older ValSpot first (the Python one in the tray/console, `dist*`, or `
 - **Round 13 after an overtime match:** still 45 s. (3.0.2 could mislearn round 24 as the side swap and then cut round 13 short.)
 - **No more "learned:" lines** in valspot.log for standard matches or Swiftplay.
 
+## Unreleased (after 3.0.3): Learn window, 2026-10-22
+
+- **Learn waits for the game:** click Capture, then click into VALORANT. It captures after the game has been in front for about half a second. If you never switch back within 30 s it says so and saves nothing.
+- **G9 / ultrawide:** the preview shows the bottom-left of the 16:9 game picture, not the black bar. On a 32:9 window it should be all game, with a green box on SWITCH PLAYER.
+- **Black capture:** if the picture comes back black, Learn says Windows is blocking the screenshot and saves nothing.
+- **valspot.log:** until your death screen has been seen once, each round you survived (or ValSpot missed) logs `death check this round: best score 0.xx`. Diag snapshot names end in `_spot0.xx`.
+- Checked offline only: frames at 1080p, 4K, 21:9 and 32:9 (dead, alive, black), plus the wait logic with a fake focus sequence. Not clicked through on a live game yet.
+
 ## 4. Check your volume afterwards
 
 - Open the Windows volume mixer: Spotify should be back at the level it was before (fades always restore it).

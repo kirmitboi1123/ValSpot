@@ -28,6 +28,8 @@ public sealed class Engine : IDisposable
     private bool _hadWindow = true;
     private string _lastKey = "";
     private Rect? _lastRect;
+    private double _roundBest = -1;   // best death-check score this round (diagnostics)
+    private int _roundChecks;
     private DateTime _wideAt = DateTime.MinValue;
     private Task<WideHit>? _wide;
     private Rect _wideRect;
@@ -130,6 +132,10 @@ public sealed class Engine : IDisposable
                 continue;
             }
             if (ev.Kind is GameEventKind.Buy or GameEventKind.Combat or GameEventKind.MatchStart) Detector.Reset();
+            if (ev.Kind == GameEventKind.Combat) { _roundBest = -1; _roundChecks = 0; }
+            // until a death has been seen at this size, say how close the check came each round
+            if (ev.Kind == GameEventKind.RoundEnd && !Rules.Dead && _roundChecks > 0 && _lastRect is { } rr && !S.DeathSeen.Contains(rr.Key))
+                Log.Write($"death check this round: best score {_roundBest:0.00} at the expected spot ({_roundChecks} checks while VALORANT was in front; dead needs {S.DeathThreshold:0.00})");
             if (ev.Kind == GameEventKind.MatchEnd && _lastRect is { } lr && !S.DeathSeen.Contains(lr.Key) && Rules.InMatch)
                 Log.Write($"NOTE death screen not seen yet at {lr.Key} (needs one death where you spectate a teammate)");
             Rules.Handle(ev, now);
@@ -182,6 +188,8 @@ public sealed class Engine : IDisposable
         bool was = Rules.Dead;
         bool dead = Detector.Check(was, r, out double score);
         LastScore = score;
+        _roundChecks++;
+        if (score > _roundBest) _roundBest = score;
         if (dead != was) Rules.SetDead(dead, dead ? "you died" : "revived");
 
         // one-time calibration: until a death has been seen at this window size, also scan the
@@ -302,7 +310,7 @@ public sealed class Diagnostics
                 Directory.CreateDirectory(Folder);
                 int w = Math.Min(1280, bmp.Width), h = Math.Max(1, bmp.Height * w / bmp.Width);
                 using var small = new Bitmap(bmp, new Size(w, h));
-                string name = $"{now:yyyyMMdd-HHmmss}_{r.W}x{r.H}_mean{mean:0}.jpg";
+                string name = $"{now:yyyyMMdd-HHmmss}_{r.W}x{r.H}_mean{mean:0}_spot{Math.Max(0, _engine.LastScore):0.00}.jpg";
                 small.Save(Path.Combine(Folder, name), ImageFormat.Jpeg);
                 foreach (var old in new DirectoryInfo(Folder).GetFiles("*.jpg").OrderBy(f => f.Name).SkipLast(_s.DiagnosticsKeep))
                     old.Delete();

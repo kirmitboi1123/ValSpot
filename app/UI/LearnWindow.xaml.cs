@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Threading.Tasks;
@@ -33,7 +34,7 @@ public partial class LearnWindow : Window
                             ? $"Your screen ({w.Key}) is already set up: ValSpot has seen your death screen. "
                             : $"Your screen size ({w.Key}) is a built-in preset, so English clients work without this. ") +
                         "You only need this if death music never starts, or your game isn't in English. " +
-                        "To use it: die, spectate a teammate, click Capture, and switch to VALORANT within 5 seconds.";
+                        "To use it: die, spectate a teammate, click Capture, then click back into VALORANT.";
         }
     }
 
@@ -46,69 +47,164 @@ public partial class LearnWindow : Window
         CaptureButton.IsEnabled = false;
         SaveButton.Visibility = Visibility.Collapsed;
         Sel.Visibility = Visibility.Collapsed;
-        int left = 5;
-        Result.Text = "Switch to VALORANT now…";
-        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
-        timer.Tick += async (_, _) =>
-        {
-            left--;
-            CaptureButton.Content = left > 0 ? $"Capturing in {left} s" : "Capturing…";
-            if (left > 0) return;
-            timer.Stop();
-            await CaptureAndSearch();
-            CaptureButton.Content = "Capture again in 5 s";
-            CaptureButton.IsEnabled = true;
-        };
-        CaptureButton.Content = "Capturing in 5 s";
-        timer.Start();
+        _ = CaptureFlow();
     }
 
-    private async Task CaptureAndSearch()
+    /// <summary>Wait until VALORANT is the window in front, then capture. A fixed countdown
+    /// captured whatever was in front when it ran out, often this window instead of the game
+    /// (seen on a friend's PC 2026-10-22).</summary>
+    private async Task CaptureFlow()
     {
-        var rect = _engine.Window.FindRect();
-        if (rect is null)
+        try
         {
+            if (_engine.Window.FindRect() is null)
+            {
+                Result.Text = "Couldn't find the VALORANT window. Is the game open (Windowed Fullscreen)?";
+                return;
+            }
+            var game = new GameWindow();   // own instance: the engine's is used from its own thread
+            CaptureButton.Content = "Waiting for VALORANT...";
+            Result.Text = "Click back into VALORANT. ValSpot captures as soon as the game is in front.";
+            var r = await WaitForGame(game.FocusedRect, TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(600));
+            if (r is null)
+            {
+                Activate();
+                Result.Text = "VALORANT never came to the front. Click Capture, then click into the game within 30 seconds.";
+                Log.Write("learn: VALORANT wasn't brought to the front within 30 s; nothing captured");
+                return;
+            }
+            CaptureButton.Content = "Capturing...";
+            Result.Text = "Capturing...";
+            var frames = await Task.Run(() => CaptureBurst(game, r.Value));
             Activate();
-            Result.Text = "Couldn't find the VALORANT window. Is the game open (Windowed Fullscreen)?";
+            if (frames.Count == 0)
+            {
+                Result.Text = "You left VALORANT before the capture finished. Capture again and stay in the game for 2 seconds.";
+                return;
+            }
+            Apply(Analyze(S, frames, new Core.Rect(0, 0, r.Value.W, r.Value.H)), r.Value);
+        }
+        finally
+        {
+            CaptureButton.Content = "Capture";
+            CaptureButton.IsEnabled = true;
+        }
+    }
+
+    /// <summary>Polls until the game has been the window in front for <paramref name="settle"/>
+    /// without a break, then returns its rect; null after <paramref name="timeout"/>.</summary>
+    public static async Task<Core.Rect?> WaitForGame(Func<Core.Rect?> focused, TimeSpan timeout, TimeSpan settle, int pollMs = 100)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        TimeSpan? since = null;
+        while (clock.Elapsed < timeout)
+        {
+            var r = focused();
+            if (r is null) since = null;
+            else
+            {
+                since ??= clock.Elapsed;
+                if (clock.Elapsed - since.Value >= settle) return r;
+            }
+            await Task.Delay(pollMs);
+        }
+        return null;
+    }
+
+    /// <summary>A burst of 8 frames over ~2 s: one frame can land on a moment where a bright
+    /// effect sits behind the text. Stops if the game leaves the front.</summary>
+    private static List<Bitmap> CaptureBurst(GameWindow game, Core.Rect r)
+    {
+        var screen = new DesktopScreen();
+        var frames = new List<Bitmap>();
+        for (int i = 0; i < 8; i++)
+        {
+            if (game.FocusedRect() is not { } now || now != r) break;
+            frames.Add(screen.GrabColor(r));
+            System.Threading.Thread.Sleep(150);
+        }
+        return frames;
+    }
+
+    public sealed record LearnResult(Bitmap Frame, Core.Rect Area, WideHit Hit, bool Black, double PictureMean);
+
+    /// <summary>The part of the frame to show: the bottom-left of the 16:9 game picture, not of
+    /// the window (on a 32:9 window the window's bottom-left is mostly black bar).</summary>
+    public static Core.Rect PictureArea(Core.Rect r0)
+    {
+        var vp = DeathDetector.Viewport(r0);
+        return new(vp.X, vp.Y + (int)(vp.H * 0.58), (int)(vp.W * 0.40), (int)(vp.H * 0.40));
+    }
+
+    /// <summary>Picks the frame where the built-in marker scores best, and checks for a black
+    /// capture (the whole 16:9 picture dark: Windows isn't letting ValSpot see the game).
+    /// Disposes the frames it doesn't keep.</summary>
+    public static LearnResult Analyze(Settings s, IReadOnlyList<Bitmap> frames, Core.Rect r0)
+    {
+        Bitmap? keep = null;
+        var best = new WideHit(-1, default, "");
+        foreach (var bmp in frames)
+        {
+            var h = new DeathDetector(s, ToFrame(bmp)).WideSearch(r0, null, new[] { 0.80, 0.94, 1.06, 1.20 });
+            if (keep == null || h.Score > best.Score)
+            {
+                keep = bmp;
+                best = h;
+            }
+            if (best.Score >= 0.95) break;
+        }
+        foreach (var bmp in frames) if (!ReferenceEquals(bmp, keep)) bmp.Dispose();
+
+        var vp = DeathDetector.Viewport(r0);
+        double mean;
+        using (var pic = keep!.Clone(new System.Drawing.Rectangle(vp.X, vp.Y, vp.W, vp.H), PixelFormat.Format32bppArgb))
+            mean = GrayImage.FromBitmap(pic).Mean();
+        bool black = mean < 3.0;
+
+        var area = PictureArea(r0);
+        if (!black && best.Score >= s.CalibrateThreshold && HitBox(s, best) is { } box && !Contains(area, box))
+            area = DeathDetector.WideArea(r0);   // the line sits outside the 16:9 crop: show the wider one
+        return new LearnResult(keep, area, best, black, mean);
+    }
+
+    /// <summary>Where the found marker sits, in window coordinates.</summary>
+    public static (double X, double Y, double W, double H)? HitBox(Settings s, WideHit hit)
+    {
+        var d = new DeathDetector(s, new FrameScreen(new byte[3], 1, 1));
+        var t = d.Templates.Find(x => x.Name == hit.Name);
+        if (t == null) return null;
+        return (hit.Tr.Ox + t.X * hit.Tr.K, hit.Tr.Oy + t.Y * hit.Tr.K, t.W * hit.Tr.K, t.H * hit.Tr.K);
+    }
+
+    private static bool Contains(Core.Rect a, (double X, double Y, double W, double H) b) =>
+        b.X >= a.X && b.Y >= a.Y && b.X + b.W <= a.X + a.W && b.Y + b.H <= a.Y + a.H;
+
+    /// <summary>Shows a capture's result. <paramref name="r"/> is the real window (for the size key).</summary>
+    public void Apply(LearnResult res, Core.Rect r)
+    {
+        _rect0 = new Core.Rect(0, 0, r.W, r.H);
+        _frame?.Dispose();
+        _frame = res.Frame;
+        var hit = res.Hit;
+
+        if (res.Black)
+        {
+            View.Visibility = Visibility.Collapsed;
+            Placeholder.Visibility = Visibility.Visible;
+            Placeholder.Text = "The screenshot came back black.";
+            Step.Text = "Windows isn't letting ValSpot see the game picture, so it can't learn your death screen or notice when you die. " +
+                        "In VALORANT, set Display Mode to Windowed Fullscreen. If Windows HDR is on, try turning it off. Then capture again.";
+            Result.Text = "Nothing saved.";
+            Log.Write($"WARN learn: the capture of the VALORANT window is black (picture brightness {res.PictureMean:0.0}); nothing saved");
             return;
         }
-        var r = rect.Value;
-        _rect0 = new Core.Rect(0, 0, r.W, r.H);
-        Result.Text = "Capturing…";
-        // a burst of 8 frames over ~2 s, keeping the best: one frame can land on a moment where a
-        // bright effect sits behind the text
-        var (bestBmp, hit) = await Task.Run(() =>
-        {
-            var screen = new DesktopScreen();
-            Bitmap? keep = null;
-            var best = new WideHit(-1, default, "");
-            for (int i = 0; i < 8; i++)
-            {
-                var bmp = screen.GrabColor(r);
-                var h = new DeathDetector(S, ToFrame(bmp)).WideSearch(_rect0, null, new[] { 0.80, 0.94, 1.06, 1.20 });
-                if (h.Score > best.Score)
-                {
-                    keep?.Dispose();
-                    keep = bmp;
-                    best = h;
-                }
-                else bmp.Dispose();
-                if (best.Score >= 0.95) break;
-                System.Threading.Thread.Sleep(150);
-            }
-            return (keep!, best);
-        });
-        Activate();
-        _frame?.Dispose();
-        _frame = bestBmp;
 
-        _area = DeathDetector.WideArea(_rect0);
+        _area = res.Area;
         ShowArea();
         if (hit.Score >= S.CalibrateThreshold)
         {
             _engine.Detector.SaveCalibration(_rect0, hit.Tr, $"learned from your capture, score {hit.Score:0.00}");
-            var t = _engine.Detector.Templates.Find(x => x.Name == hit.Name);
-            if (t != null) MarkBox(hit.Tr.Ox + t.X * hit.Tr.K, hit.Tr.Oy + t.Y * hit.Tr.K, t.W * hit.Tr.K, t.H * hit.Tr.K);
+            if (HitBox(S, hit) is { } b) MarkBox(b.X, b.Y, b.W, b.H);
             Step.Text = "Found it. The green box is what ValSpot watches for.";
             Result.Text = $"Saved for {r.W}x{r.H} (match {hit.Score:0.00}). Death music is ready.";
             Log.Write($"learn: found the built-in marker in your capture (score {hit.Score:0.00})");
@@ -122,7 +218,7 @@ public partial class LearnWindow : Window
         }
     }
 
-    private static FrameScreen ToFrame(Bitmap bmp)
+    public static FrameScreen ToFrame(Bitmap bmp)
     {
         var data = bmp.LockBits(new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
         var rgb = new byte[bmp.Width * bmp.Height * 3];
